@@ -5,7 +5,7 @@ use rand::Rng;
 use crate::primitives::TexturedQuad;
 use crate::types::Vec2;
 use crate::drawable::{Drawable, DebugDrawable};
-use crate::quadtree::Quadtree;
+use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
 /// The texture width.
 const TEX_WIDTH: usize = 1024;
@@ -14,34 +14,43 @@ const TEX_WIDTH: usize = 1024;
 const TEX_HEIGHT: usize = 1024;
 
 /// The number of stars.
-const STAR_COUNT: usize = 20;
+const STAR_COUNT: usize = 1000;
+
+/// A single star.
+struct Star {
+    position: Vec2,
+}
+
+impl Spatial for Star {
+    fn xy(&self) -> &Vec2 {
+        &self.position
+    }
+}
 
 /// A structure representing the rendering of a Galaxy. For now this includes both the simulation
 /// and rendering logic, but it would be nice to separate them.
 pub struct Galaxy {
-    points: Vec<Vec2>,
     textured_quad: TexturedQuad,
     texture_dirty: bool,
-    quadtree: Quadtree<i32>,
+    quadtree: Quadtree<Star>,
 }
 
 impl Galaxy {
     /// Create a new galaxy that renders via the given miniquad context.
     pub fn new<R: Rng + ?Sized>(ctx: &mut Context, rng: &mut R) -> Result<Self, Box<dyn Error>> {
-        // Generate stars.
-        let create_star = |_: usize| Vec2::new(
-            rng.gen_range(-1.0..1.0 as f32),
-            rng.gen_range(-1.0..1.0 as f32));
-        let points: Vec<Vec2> = (0..STAR_COUNT).map(create_star).collect();
-
         // Create textured quad for drawing stars.
         let textured_quad = TexturedQuad::new(ctx, TEX_WIDTH, TEX_HEIGHT)?;
 
         // Create quadtree.
-        let quadtree = Quadtree::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0))?;
+        let mut quadtree = Quadtree::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0))?;
+
+        // Generate stars.
+        for _ in 0..STAR_COUNT {
+            let position = Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0));
+            quadtree.add(Star { position });
+        }
 
         Ok(Self {
-            points,
             textured_quad,
             texture_dirty: true,
             quadtree,
@@ -59,23 +68,29 @@ impl Galaxy {
             let mut bytes = vec![0; 4 * TEX_WIDTH * TEX_HEIGHT];
 
             // Fill buffer.
-            for star in &self.points {
-                // Check that the star is within the texture.
-                if star.x > -1.0 && star.x < 1.0 as f32 && star.y > -1.0 && star.y < 1.0 as f32 {
-                    // Convert star position to x and y in texture.
-                    let x = ((star.x / 2.0 + 0.5) * TEX_WIDTH as f32) as usize;
-                    let y = ((star.y / 2.0 + 0.5) * TEX_HEIGHT as f32) as usize;
+            self.quadtree.walk_nodes(|_, node| {
+                match node {
+                    QuadtreeNode::Leaf(star) => {
+                        // Check that the star is within the texture.
+                        let pos = star.position;
+                        if pos.x > -1.0 && pos.x < 1.0 as f32 && pos.y > -1.0 && pos.y < 1.0 as f32 {
+                            // Convert star position to x and y in texture.
+                            let x = ((pos.x / 2.0 + 0.5) * TEX_WIDTH as f32) as usize;
+                            let y = TEX_HEIGHT - ((pos.y / 2.0 + 0.5) * TEX_HEIGHT as f32) as usize;
 
-                    // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
-                    let idx = 4 * (y * TEX_WIDTH + x);
-                    let pixel = &mut bytes[idx..idx+4];
+                            // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
+                            let idx = 4 * (y * TEX_WIDTH + x);
+                            let pixel = &mut bytes[idx..idx+4];
 
-                    pixel[0] = 0xFF;
-                    pixel[1] = 0xFF;
-                    pixel[2] = 0xFF;
-                    pixel[3] = 0xFF;
+                            pixel[0] = 0xFF;
+                            pixel[1] = 0xFF;
+                            pixel[2] = 0xFF;
+                            pixel[3] = 0xFF;
+                        }
+                    },
+                    _ => {},
                 }
-            }
+            });
 
             // Update texture.
             self.textured_quad.texture.update(ctx, &bytes);

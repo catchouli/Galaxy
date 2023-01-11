@@ -71,18 +71,6 @@ fn main() {
     env_logger::init();
     log::info!("Hello!");
 
-    let mut offset: usize = 0;
-
-    //print!("= [");
-    //for i in 0..17 {
-    //    let nodes: usize = 4_usize.pow(i);
-    //    //println!("{}, {}", nodes, offset);
-    //    print!("{}, ", offset);
-    //    offset += nodes;
-    //}
-
-    //return;
-
     // Create window config.
     let config = conf::Conf {
         window_title: "Galaxy".to_owned(),
