@@ -4,6 +4,8 @@ use crate::{types::Vec2, drawable::DebugDrawable, primitives::WireframeQuad};
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
 
+const BLOCK_SIZE: usize = 10000;
+
 /// A trait for objects with a position.
 pub trait Spatial {
     fn xy(&self) -> &Vec2;
@@ -72,8 +74,9 @@ pub struct Quadtree<T: Spatial, Internal: Default = ()> {
     /// ones in Quadtree::min.
     max: Vec2,
 
-    /// The quadtree.
-    nodes: Vec<QuadtreeNode<T, Internal>>,
+    /// The quadtree nodes, as a flat list.
+    blocks: Vec<Option<Vec<QuadtreeNode<T, Internal>>>>,
+    //nodes: Vec<QuadtreeNode<T, Internal>>,
 
     /// A wireframe quad primitive for debug drawing.
     wireframe_quad: Option<WireframeQuad>,
@@ -85,17 +88,56 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         Ok(Self {
             min,
             max,
-            nodes: Vec::new(),
+            blocks: Vec::new(),
             wireframe_quad: None,
         })
     }
 
     pub fn get(&self, index: HilbertIndex) -> &QuadtreeNode<T, Internal> {
-        self.nodes.get(index.array_index()).unwrap_or(&QuadtreeNode::Empty)
+        let index = index.array_index();
+        let block = index / BLOCK_SIZE;
+        let index_in_block = index - (block * BLOCK_SIZE);
+
+        match self.blocks.get(block) {
+            Some(Some(block)) => block.get(index_in_block).unwrap_or(&QuadtreeNode::Empty),
+            _ => &QuadtreeNode::Empty,
+        }
     }
 
     pub fn get_mut(&mut self, index: HilbertIndex) -> Option<&mut QuadtreeNode<T, Internal>> {
-        self.nodes.get_mut(index.array_index())
+        let index = index.array_index();
+        let block = index / BLOCK_SIZE;
+        let index_in_block = index - (block * BLOCK_SIZE);
+
+        match self.blocks.get_mut(block) {
+            Some(Some(block)) => block.get_mut(index_in_block),
+            _ => None,
+        }
+    }
+
+    /// Safely insert a node at an index, resizing the internal vector if necessary.
+    fn safe_insert(&mut self, index: HilbertIndex, node: QuadtreeNode<T, Internal>) {
+        let index = index.array_index();
+        let block = index / BLOCK_SIZE;
+        let index_in_block = index - (block * BLOCK_SIZE);
+
+        if self.blocks.len() <= block {
+            self.blocks.resize_with(block + 1, Default::default);
+        }
+
+        let block = self.blocks[block].get_or_insert_with(|| {
+            let mut block = Vec::new();
+            block.resize_with(BLOCK_SIZE, || QuadtreeNode::Empty);
+            block
+        });
+
+        block[index_in_block] = node;
+
+        //let array_index = index.array_index();
+        //if array_index + 1 > self.nodes.len() {
+        //    self.nodes.resize_with(array_index + 1, || QuadtreeNode::Empty);
+        //}
+        //self.nodes[array_index] = node;
     }
 
     /// Add a new item to the quadtree.
@@ -245,15 +287,6 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
          if point.y < center.y { 0 } else { 1 })
     }
 
-    /// Safely insert a node at an index, resizing the internal vector if necessary.
-    fn safe_insert(&mut self, index: HilbertIndex, node: QuadtreeNode<T, Internal>) {
-        let array_index = index.array_index();
-        if array_index + 1 > self.nodes.len() {
-            self.nodes.resize_with(array_index + 1, || QuadtreeNode::Empty);
-        }
-        self.nodes[array_index] = node;
-    }
-
     /// Walk the quadtree depth-first, calling the specified callback with the hilbert index.
     pub fn walk_indices<F>(&self, mut f: F)
         where F: FnMut(HilbertIndex) -> ()
@@ -290,8 +323,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         where F: FnMut(HilbertIndex, &QuadtreeNode<T, Internal>) -> ()
     {
         self.walk_indices(|index| {
-            let array_index = index.array_index();
-            f(index, &self.nodes[array_index]);
+            f(index, self.get(index));
         });
     }
 }
