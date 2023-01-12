@@ -7,12 +7,15 @@ mod drawable;
 mod quadtree;
 mod hilbert;
 
-use std::error::Error;
+use std::{error::Error, iter::repeat};
 
 use galaxy::Galaxy;
 use miniquad::*;
 use perlin_map::PerlinMap;
 use drawable::Drawable;
+use rand::{rngs::StdRng, SeedableRng};
+
+use crate::hilbert::HilbertIndex;
 
 /// The window width.
 const WINDOW_WIDTH: i32 = 800;
@@ -28,6 +31,7 @@ const DRAW_PERLIN_MAP: bool = false;
 pub struct Stage {
     perlin_map: PerlinMap,
     galaxy: Galaxy,
+    seed: u64,
 }
 
 impl Stage {
@@ -36,12 +40,29 @@ impl Stage {
         let perlin_map = PerlinMap::new(ctx)?;
 
         // Create galaxy.
-        let galaxy = Galaxy::new(ctx, &mut rand::thread_rng())?;
+        let seed = 3;
+        let galaxy = Self::generate_galaxy(ctx, seed)?;
 
         Ok(Stage {
             perlin_map,
             galaxy,
+            seed,
         })
+    }
+
+    fn generate_galaxy(ctx: &mut Context, seed: u64) -> Result<Galaxy, Box<dyn Error>> {
+        log::info!("Generating galaxy with seed {seed}");
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let galaxy = Galaxy::new(ctx, &mut rng)?;
+
+        // Print out quadtree for debugging.
+        galaxy.quadtree.walk_nodes(|index@HilbertIndex(_, depth), node| {
+            let indentation: String = repeat(' ').take(depth as usize * 2).collect();
+            log::debug!("{indentation}{index:?} {node:?}");
+        });
+
+        Ok(galaxy)
     }
 }
 
@@ -63,6 +84,17 @@ impl EventHandler for Stage {
 
         ctx.end_render_pass();
         ctx.commit_frame();
+    }
+
+    fn key_down_event(&mut self, ctx: &mut Context, keycode: KeyCode, _keymods: KeyMods, _repeat: bool) {
+        if keycode == KeyCode::Escape {
+            ctx.quit();
+        }
+        else {
+            log::info!("Key pressed, regenerating galaxy");
+            self.seed += 1;
+            self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
+        }
     }
 }
 

@@ -26,6 +26,13 @@ impl<T: Spatial> QuadtreeNode<T> {
         }
     }
 
+    fn is_leaf(&self) -> bool {
+        match self {
+            QuadtreeNode::Leaf(_) => true,
+            _ => false,
+        }
+    }
+
     fn is_internal(&self) -> bool {
         match self {
             QuadtreeNode::Internal => true,
@@ -177,11 +184,11 @@ impl<T: Spatial> Quadtree<T> {
                 log::debug!("Found unique quadrants for items, inserting leaf nodes");
 
                 let leaf_a_x = current_x * 2 + leaf_a_quadrant_x;
-                let leaf_a_y = current_x * 2 + leaf_a_quadrant_y;
+                let leaf_a_y = current_y * 2 + leaf_a_quadrant_y;
                 let leaf_a_index = HilbertIndex::from_xy_depth((leaf_a_x, leaf_a_y), current_index.depth() + 1);
 
                 let leaf_b_x = current_x * 2 + leaf_b_quadrant_x;
-                let leaf_b_y = current_x * 2 + leaf_b_quadrant_y;
+                let leaf_b_y = current_y * 2 + leaf_b_quadrant_y;
                 let leaf_b_index = HilbertIndex::from_xy_depth((leaf_b_x, leaf_b_y), current_index.depth() + 1);
 
                 let new_len = usize::max(leaf_a_index.array_index(), leaf_b_index.array_index()) + 1;
@@ -254,18 +261,20 @@ impl<T: Spatial> DebugDrawable for Quadtree<T> {
         let root_origin = self.min;
         let root_size = Vec2::new(self.max.x - self.min.x, self.max.y - self.min.y);
 
-        self.walk_indices(|index| {
-            let (x, y) = index.to_xy();
-            let grid_size = 1 << index.depth();
+        self.walk_nodes(|index, node| {
+            if node.is_internal() || node.is_leaf() {
+                let (x, y) = index.to_xy();
+                let grid_size = 1 << index.depth();
 
-            let cell_size = Vec2::new(root_size.x / grid_size as f32, root_size.y / grid_size as f32);
+                let cell_size = Vec2::new(root_size.x / grid_size as f32, root_size.y / grid_size as f32);
 
-            let cell_min = Vec2::new(root_origin.x + cell_size.x * x as f32,
-                                     root_origin.y + cell_size.y * y as f32);
-            let cell_max = Vec2::new(cell_min.x + cell_size.x,
-                                     cell_min.y + cell_size.y);
+                let cell_min = Vec2::new(root_origin.x + cell_size.x * x as f32,
+                                         root_origin.y + cell_size.y * y as f32);
+                let cell_max = Vec2::new(cell_min.x + cell_size.x,
+                                         cell_min.y + cell_size.y);
 
-            wireframe_quad.draw(ctx, &cell_min, &cell_max);
+                wireframe_quad.draw(ctx, &cell_min, &cell_max);
+            }
         });
     }
 }

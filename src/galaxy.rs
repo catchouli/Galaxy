@@ -14,10 +14,10 @@ const TEX_WIDTH: usize = 1024;
 const TEX_HEIGHT: usize = 1024;
 
 /// The number of stars.
-const STAR_COUNT: usize = 1000;
+const STAR_COUNT: usize = 10_000;
 
 /// A single star.
-struct Star {
+pub struct Star {
     position: Vec2,
 }
 
@@ -32,7 +32,7 @@ impl Spatial for Star {
 pub struct Galaxy {
     textured_quad: TexturedQuad,
     texture_dirty: bool,
-    quadtree: Quadtree<Star>,
+    pub quadtree: Quadtree<Star>,
 }
 
 impl Galaxy {
@@ -47,6 +47,7 @@ impl Galaxy {
         // Generate stars.
         for _ in 0..STAR_COUNT {
             let position = Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0));
+            log::debug!("Adding star at position: {position:?}");
             quadtree.add(Star { position });
         }
 
@@ -76,14 +77,14 @@ impl Galaxy {
                         if pos.x > -1.0 && pos.x < 1.0 as f32 && pos.y > -1.0 && pos.y < 1.0 as f32 {
                             // Convert star position to x and y in texture.
                             let x = ((pos.x / 2.0 + 0.5) * TEX_WIDTH as f32) as usize;
-                            let y = TEX_HEIGHT - ((pos.y / 2.0 + 0.5) * TEX_HEIGHT as f32) as usize;
+                            let y = ((pos.y / 2.0 + 0.5) * TEX_HEIGHT as f32) as usize;
 
                             // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
                             let idx = 4 * (y * TEX_WIDTH + x);
                             let pixel = &mut bytes[idx..idx+4];
 
                             pixel[0] = 0xFF;
-                            pixel[1] = 0xFF;
+                            pixel[1] = 0x00;
                             pixel[2] = 0xFF;
                             pixel[3] = 0xFF;
                         }
