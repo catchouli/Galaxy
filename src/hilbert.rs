@@ -102,6 +102,20 @@ impl HilbertIndex {
         DEPTH_OFFSETS[depth as usize] + self.index() as usize
     }
 
+    /// Get the children of this hilbert index, i.e. the four nodes in the same location as this
+    /// one on a higher order hilbert curve.
+    pub fn children(&self) -> [HilbertIndex; 4] {
+        let child_offset = self.index() * 4;
+        let child_depth = self.depth() + 1;
+
+        [
+            HilbertIndex(child_offset + 0, child_depth),
+            HilbertIndex(child_offset + 1, child_depth),
+            HilbertIndex(child_offset + 2, child_depth),
+            HilbertIndex(child_offset + 3, self.depth() + 1)
+        ]
+    }
+
     /// Rotate/flip a quadrant appropriately.
     /// https://en.wikipedia.org/wiki/Hilbert_curve#Applications_and_mapping_algorithms
     fn rot(n: u32, x: &mut u32, y: &mut u32, rx: u32, ry: u32) {
