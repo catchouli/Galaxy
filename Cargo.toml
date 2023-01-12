@@ -9,6 +9,6 @@ edition = "2021"
 miniquad = "0.3.15"
 noise = "0.8.2"
 rand = "0.8.5"
-log = "0.4.17"
+log = { version = "0.4.17", features = ["release_max_level_info"] }
 env_logger = "0.10.0"
 quickcheck = "1.0.3"

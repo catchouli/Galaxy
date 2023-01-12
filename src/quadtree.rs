@@ -10,32 +10,32 @@ pub trait Spatial {
 }
 
 /// A quadtree node item, either an internal node, a leaf node, or empty (i.e. a sparse region
-/// where we can stop traversal.)
+/// where we can stop traversal).
 #[derive(PartialEq)]
-pub enum QuadtreeNode<T: Spatial> {
+pub enum QuadtreeNode<T: Spatial, Internal: Default> {
     Empty,
-    Internal,
+    Internal(Internal),
     Leaf(T)
 }
 
-impl<T: Spatial> QuadtreeNode<T> {
-    fn is_empty(&self) -> bool {
+impl<T: Spatial, Internal: Default> QuadtreeNode<T, Internal> {
+    pub fn is_empty(&self) -> bool {
         match self {
             QuadtreeNode::Empty => true,
             _ => false,
         }
     }
 
-    fn is_leaf(&self) -> bool {
+    pub fn is_leaf(&self) -> bool {
         match self {
             QuadtreeNode::Leaf(_) => true,
             _ => false,
         }
     }
 
-    fn is_internal(&self) -> bool {
+    pub fn is_internal(&self) -> bool {
         match self {
-            QuadtreeNode::Internal => true,
+            QuadtreeNode::Internal(_) => true,
             _ => false,
         }
     }
@@ -49,19 +49,21 @@ impl<T: Spatial> QuadtreeNode<T> {
     }
 }
 
-impl<T: Spatial> core::fmt::Debug for QuadtreeNode<T> {
+impl<T: Spatial, Internal: Default> core::fmt::Debug for QuadtreeNode<T, Internal> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => write!(f, "Empty"),
-            Self::Internal => write!(f, "Internal"),
+            Self::Internal(_) => write!(f, "Internal"),
             Self::Leaf(item) => f.debug_tuple("Leaf").field(item.xy()).finish(),
         }
     }
 }
 
 /// A sparse quadtree which is represented by a flat list of spatially indexed nodes. The leaf
-/// nodes own their contained items and the tree grows dynamically like a Vec.
-pub struct Quadtree<T: Spatial> {
+/// nodes own their contained items and the tree grows dynamically like a Vec. The type `T` is the
+/// type to be stored in the quadtree, and one is present in each leaf node of the tree. The
+/// optional type parameter `Internal` can be used to specify a type for internal nodes.
+pub struct Quadtree<T: Spatial, Internal: Default = ()> {
     /// The min of the bounds of the quadtree's root node, both values must be less than the ones
     /// in Quadtree::max.
     min: Vec2,
@@ -71,13 +73,13 @@ pub struct Quadtree<T: Spatial> {
     max: Vec2,
 
     /// The quadtree.
-    nodes: Vec<QuadtreeNode<T>>,
+    nodes: Vec<QuadtreeNode<T, Internal>>,
 
     /// A wireframe quad primitive for debug drawing.
     wireframe_quad: Option<WireframeQuad>,
 }
 
-impl<T: Spatial> Quadtree<T> {
+impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
     /// Create a new quadtree with the given bounds.
     pub fn new(min: Vec2, max: Vec2) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
@@ -86,6 +88,14 @@ impl<T: Spatial> Quadtree<T> {
             nodes: Vec::new(),
             wireframe_quad: None,
         })
+    }
+
+    pub fn get(&self, index: HilbertIndex) -> Option<&QuadtreeNode<T, Internal>> {
+        self.nodes.get(index.array_index())
+    }
+
+    pub fn get_mut(&mut self, index: HilbertIndex) -> Option<&mut QuadtreeNode<T, Internal>> {
+        self.nodes.get_mut(index.array_index())
     }
 
     /// Add a new item to the quadtree.
@@ -145,7 +155,8 @@ impl<T: Spatial> Quadtree<T> {
         // leaf nodes.
         log::debug!("Splitting leaf node at {current_index:?}");
 
-        let leaf_a = std::mem::replace(&mut self.nodes[current_index.array_index()], QuadtreeNode::Internal);
+        let leaf_a = std::mem::replace(&mut self.nodes[current_index.array_index()],
+                     QuadtreeNode::Internal(Default::default()));
         let leaf_a_pos = leaf_a.xy();
 
         let leaf_b = QuadtreeNode::Leaf(item);
@@ -177,7 +188,7 @@ impl<T: Spatial> Quadtree<T> {
                 if self.nodes.len() < new_len {
                     self.nodes.resize_with(new_len, || QuadtreeNode::Empty);
                 }
-                self.nodes[current_index.array_index()] = QuadtreeNode::Internal;
+                self.nodes[current_index.array_index()] = QuadtreeNode::Internal(Default::default());
                 log::debug!("Items are in the same quadrant, descending to {current_index:?}");
             }
             else {
@@ -242,7 +253,7 @@ impl<T: Spatial> Quadtree<T> {
 
     /// Walk the quadtree depth-first, calling the specified callback with the hilbert index and node.
     pub fn walk_nodes<F>(&self, mut f: F)
-        where F: FnMut(HilbertIndex, &QuadtreeNode<T>) -> ()
+        where F: FnMut(HilbertIndex, &QuadtreeNode<T, Internal>) -> ()
     {
         self.walk_indices(|index| {
             let array_index = index.array_index();
@@ -251,7 +262,7 @@ impl<T: Spatial> Quadtree<T> {
     }
 }
 
-impl<T: Spatial> DebugDrawable for Quadtree<T> {
+impl<T: Spatial, Internal: Default> DebugDrawable for Quadtree<T, Internal> {
     fn debug_draw(&mut self, ctx: &mut miniquad::Context) {
         self.wireframe_quad.get_or_insert_with(|| {
             WireframeQuad::new(ctx).unwrap()

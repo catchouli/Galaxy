@@ -7,7 +7,7 @@
 /// The top left node on the second level would also be index 0. Instead, we store an index and a depth,
 /// and then can convert it to an array index just by adding an appropriate offset according to the depth
 /// if needed.
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct HilbertIndex(pub u32, pub u8);
 
 /// The exclusive maximum depth, as explained below.
