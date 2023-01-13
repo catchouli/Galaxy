@@ -90,10 +90,16 @@ impl EventHandler for Stage {
         if keycode == KeyCode::Escape {
             ctx.quit();
         }
-        else {
+        else if keycode == KeyCode::Space {
             log::info!("Key pressed, regenerating galaxy");
             self.seed += 1;
             self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
+        }
+        else if keycode == KeyCode::M {
+            self.galaxy.time_scale *= 10.0;
+        }
+        else if keycode == KeyCode::A {
+            self.galaxy.time_scale /= 10.0;
         }
     }
 }

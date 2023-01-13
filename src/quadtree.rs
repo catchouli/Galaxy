@@ -4,7 +4,7 @@ use crate::{types::Vec2, drawable::DebugDrawable, primitives::WireframeQuad};
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
 
-const BLOCK_SIZE: usize = 10000;
+const BLOCK_SIZE: usize = 2000;
 
 /// A trait for objects with a position.
 pub trait Spatial {
