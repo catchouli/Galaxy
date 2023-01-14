@@ -1,6 +1,6 @@
 use std::{error::Error, collections::VecDeque};
 
-use crate::{types::Vec2, drawable::DebugDrawable, primitives::WireframeQuad};
+use crate::{types::Vec2d, drawable::DebugDrawable, primitives::WireframeQuad};
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
 
@@ -8,7 +8,7 @@ const BLOCK_SIZE: usize = 2000;
 
 /// A trait for objects with a position.
 pub trait Spatial {
-    fn xy(&self) -> &Vec2;
+    fn xy(&self) -> &Vec2d;
 }
 
 /// A quadtree node item, either an internal node, a leaf node, or empty (i.e. a sparse region
@@ -43,7 +43,7 @@ impl<T: Spatial, Internal: Default> QuadtreeNode<T, Internal> {
     }
 
     /// Get the xy of the item in the node, only valid for leaf nodes.
-    fn xy(&self) -> &Vec2 {
+    fn xy(&self) -> &Vec2d {
         match self {
             QuadtreeNode::Leaf(item) => item.xy(),
             _ => panic!("Attempted to get xy of leaf node in quadtree"),
@@ -68,11 +68,11 @@ impl<T: Spatial, Internal: Default> core::fmt::Debug for QuadtreeNode<T, Interna
 pub struct Quadtree<T: Spatial, Internal: Default = ()> {
     /// The min of the bounds of the quadtree's root node, both values must be less than the ones
     /// in Quadtree::max.
-    min: Vec2,
+    min: Vec2d,
 
     /// The max of the bounds of the quadtree's root node, both values must be greater than the
     /// ones in Quadtree::min.
-    max: Vec2,
+    max: Vec2d,
 
     /// The quadtree nodes, as a flat list.
     blocks: Vec<Option<Vec<QuadtreeNode<T, Internal>>>>,
@@ -84,7 +84,7 @@ pub struct Quadtree<T: Spatial, Internal: Default = ()> {
 
 impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
     /// Create a new quadtree with the given bounds.
-    pub fn new(min: Vec2, max: Vec2) -> Result<Self, Box<dyn Error>> {
+    pub fn new(min: Vec2d, max: Vec2d) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             min,
             max,
@@ -167,7 +167,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
 
     /// Find the insert position of an item. The position might already contain another item, in
     /// which case it will need to be split recursively until the items end up in different nodes.
-    fn find_insert_pos(&self, pos: &Vec2) -> HilbertIndex {
+    fn find_insert_pos(&self, pos: &Vec2d) -> HilbertIndex {
         // Start at the root and recursively search for an appropriate insert position (leaf node)
         // to insert the item.
         let mut cur_xy = (0, 0);
@@ -227,11 +227,11 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         }
 
         // Calculate bounds of current node.
-        let original_node_size = (self.max - self.min) / (1 << insert_pos.depth()) as f32;
+        let original_node_size = (self.max - self.min) / (1 << insert_pos.depth()) as f64;
 
         let (mut x, mut y) = insert_pos.to_xy();
-        let mut node_min = self.min + Vec2::new(original_node_size.x * x as f32,
-                                                original_node_size.y * y as f32);
+        let mut node_min = self.min + Vec2d::new(original_node_size.x * x as f64,
+                                                 original_node_size.y * y as f64);
         let mut node_max = node_min + original_node_size;
 
         loop {
@@ -282,7 +282,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
     }
 
     /// Get the quadrant of a point with regards to the specified cell center.
-    fn quadrant(center: &Vec2, point: &Vec2) -> (u32, u32) {
+    fn quadrant(center: &Vec2d, point: &Vec2d) -> (u32, u32) {
         (if point.x < center.x { 0 } else { 1 },
          if point.y < center.y { 0 } else { 1 })
     }
@@ -336,21 +336,21 @@ impl<T: Spatial, Internal: Default> DebugDrawable for Quadtree<T, Internal> {
         let wireframe_quad = self.wireframe_quad.take().unwrap();
 
         let root_origin = self.min;
-        let root_size = Vec2::new(self.max.x - self.min.x, self.max.y - self.min.y);
+        let root_size = Vec2d::new(self.max.x - self.min.x, self.max.y - self.min.y);
 
         self.walk_nodes(|index, node| {
             if node.is_internal() || node.is_leaf() {
                 let (x, y) = index.to_xy();
                 let grid_size = 1 << index.depth();
 
-                let cell_size = Vec2::new(root_size.x / grid_size as f32, root_size.y / grid_size as f32);
+                let cell_size = Vec2d::new(root_size.x / grid_size as f64, root_size.y / grid_size as f64);
 
-                let cell_min = Vec2::new(root_origin.x + cell_size.x * x as f32,
-                                         root_origin.y + cell_size.y * y as f32);
-                let cell_max = Vec2::new(cell_min.x + cell_size.x,
+                let cell_min = Vec2d::new(root_origin.x + cell_size.x * x as f64,
+                                         root_origin.y + cell_size.y * y as f64);
+                let cell_max = Vec2d::new(cell_min.x + cell_size.x,
                                          cell_min.y + cell_size.y);
 
-                wireframe_quad.draw(ctx, &cell_min, &cell_max);
+                wireframe_quad.draw(ctx, &cell_min.into(), &cell_max.into());
             }
         });
     }

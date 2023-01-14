@@ -18,10 +18,10 @@ use rand::{rngs::StdRng, SeedableRng};
 use crate::hilbert::HilbertIndex;
 
 /// The window width.
-const WINDOW_WIDTH: i32 = 800;
+const WINDOW_WIDTH: i32 = 1024;
 
 /// The window height.
-const WINDOW_HEIGHT: i32 = 800;
+const WINDOW_HEIGHT: i32 = 1024;
 
 /// Whether to draw the perlin noise map.
 const DRAW_PERLIN_MAP: bool = false;
@@ -40,7 +40,7 @@ impl Stage {
         let perlin_map = PerlinMap::new(ctx)?;
 
         // Create galaxy.
-        let seed = 3;
+        let seed = 152;
         let galaxy = Self::generate_galaxy(ctx, seed)?;
 
         Ok(Stage {
