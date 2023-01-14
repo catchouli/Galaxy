@@ -7,7 +7,7 @@ mod drawable;
 mod quadtree;
 mod hilbert;
 
-use std::{error::Error, iter::repeat, time::{Instant, Duration}};
+use std::{error::Error, iter::repeat, time::Instant};
 
 use galaxy::Galaxy;
 use miniquad::*;
