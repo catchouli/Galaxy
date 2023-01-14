@@ -7,7 +7,7 @@ mod drawable;
 mod quadtree;
 mod hilbert;
 
-use std::{error::Error, iter::repeat};
+use std::{error::Error, iter::repeat, time::{Instant, Duration}};
 
 use galaxy::Galaxy;
 use miniquad::*;
@@ -23,6 +23,9 @@ const WINDOW_WIDTH: i32 = 1024;
 /// The window height.
 const WINDOW_HEIGHT: i32 = 1024;
 
+/// The fixed timestep, each update will account for this many seconds of simulation.
+const FIXED_TIMESTEP: f64 = 1.0 / 60.0;
+
 /// Whether to draw the perlin noise map.
 const DRAW_PERLIN_MAP: bool = false;
 
@@ -32,10 +35,14 @@ pub struct Stage {
     perlin_map: PerlinMap,
     galaxy: Galaxy,
     seed: u64,
+    start_time: Instant,
+    sim_time: f64,
 }
 
 impl Stage {
     pub fn new(ctx: &mut Context) -> Result<Stage, Box<dyn Error>> {
+        let start_time = Instant::now();
+
         // Create perlin map.
         let perlin_map = PerlinMap::new(ctx)?;
 
@@ -47,6 +54,8 @@ impl Stage {
             perlin_map,
             galaxy,
             seed,
+            start_time,
+            sim_time: start_time.elapsed().as_secs_f64(),
         })
     }
 
@@ -68,9 +77,16 @@ impl Stage {
 
 impl EventHandler for Stage {
     fn update(&mut self, ctx: &mut Context) {
-        // Update drawables.
-        self.perlin_map.update(ctx);
-        self.galaxy.update(ctx);
+        // Update timer.
+        let time_since_start = self.start_time.elapsed().as_secs_f64();
+
+        if self.sim_time + FIXED_TIMESTEP < time_since_start {
+            self.sim_time += FIXED_TIMESTEP;
+
+            // Update drawables.
+            self.perlin_map.update(ctx, FIXED_TIMESTEP);
+            self.galaxy.update(ctx, FIXED_TIMESTEP);
+        }
     }
 
     fn draw(&mut self, ctx: &mut Context) {

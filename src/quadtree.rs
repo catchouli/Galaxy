@@ -132,12 +132,6 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         });
 
         block[index_in_block] = node;
-
-        //let array_index = index.array_index();
-        //if array_index + 1 > self.nodes.len() {
-        //    self.nodes.resize_with(array_index + 1, || QuadtreeNode::Empty);
-        //}
-        //self.nodes[array_index] = node;
     }
 
     /// Add a new item to the quadtree.
@@ -145,7 +139,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         // If item is outside the bounds of the quadtree, do nothing.
         let pos = item.xy();
         if pos.x < self.min.x || pos.x > self.max.x || pos.y < self.min.y || pos.y > self.max.y {
-            log::info!("Item is outside of quadtree area, discarding");
+            log::warn!("Item at position {pos:?} is outside of quadtree area, discarding");
             return;
         }
 
@@ -155,13 +149,21 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         // If it's empty, (e.g. in the case where this is the first item added to the tree), we can
         // just add this node directly to the specified index.
         if self.get(insert_pos).is_empty() {
-            log::debug!("Inserting first node into tree at index {insert_pos:?}");
+            log::trace!("Inserting first node into tree at index {insert_pos:?}");
             self.safe_insert(insert_pos, QuadtreeNode::Leaf(item));
             return;
         }
         // Otherwise, we have to split the current leaf node until the two items are in separate quadrants.
         else {
             self.split_and_insert(insert_pos, item);
+        }
+    }
+
+    /// Remove a node from the tree.
+    pub fn remove(&mut self, index: HilbertIndex) -> Option<QuadtreeNode<T, Internal>> {
+        match self.get_mut(index) {
+            Some(node) => Some(std::mem::replace(node, QuadtreeNode::Empty)),
+            _ => None,
         }
     }
 
@@ -211,7 +213,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
     fn split_and_insert(&mut self, mut insert_pos: HilbertIndex, item: T) {
         // Otherwise, we have to split the current leaf node until the two items are in separate
         // leaf nodes.
-        log::debug!("Splitting leaf node at {insert_pos:?}");
+        log::trace!("Splitting leaf node at {insert_pos:?}");
 
         // Replace leaf node in tree with internal node, and prepare to insert our two nodes
         // further down the tree.
@@ -222,7 +224,7 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         // If the items match exactly, it's better just to discard some so that we don't end up
         // recursing infinitely.
         if a.xy() == b.xy() {
-            log::info!("Tried to insert two identical items, discarding one.");
+            log::warn!("Tried to insert two identical items at position {:?}, discarding one.", a.xy());
             return;
         }
 

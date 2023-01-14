@@ -6,7 +6,7 @@ use rand::Rng;
 use crate::hilbert::HilbertIndex;
 use crate::primitives::TexturedQuad;
 use crate::types::Vec2d;
-use crate::drawable::Drawable;
+use crate::drawable::{Drawable, DebugDrawable};
 use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
 /// The texture width.
@@ -20,7 +20,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 1000;
+const STAR_COUNT: usize = 100;
 
 /// The mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -40,10 +40,13 @@ const GRAVITATIONAL_CONSTANT: f64 = 4.30091727063;
 const GALAXY_DIAMETER: f64 = 32408.0;
 
 /// Time scale of the simulation.
-const INITIAL_TIME_SCALE: f64 = 1.0 / 30.0;
+const INITIAL_TIME_SCALE: f64 = 1.0;
 
 /// Minimum distance^2 in gravity calculation, below which it is clamped to this value.
 const MIN_GRAVITY_DISTANCE_SQUARED: f64 = 1e5;
+
+/// Whether to draw the debug overlay for the quadtree.
+const DEBUG_DRAW_QUADTREE: bool = true;
 
 /// A single star in our galaxy.
 pub struct Star {
@@ -118,9 +121,6 @@ impl Galaxy {
             quadtree.add(Star { position, velocity, mass });
         }
 
-        // Update mass distribution.
-        Self::update_mass_distribution(&mut quadtree);
-
         Ok(Self {
             textured_quad,
             texture_dirty: true,
@@ -140,6 +140,7 @@ impl Galaxy {
     }
 
     fn update_mass_distribution_inner(quadtree: &mut Quadtree<Star, Option<Region>>, index: HilbertIndex) {
+        //log::info!("Updating mass distribution for node {index:?}");
         // Update all children recursively, and then sum up their masses and produce a weighted
         // center of mess.
         let mut mass = 0.0;
@@ -175,19 +176,23 @@ impl Galaxy {
             center_of_mass.y /= mass;
         }
 
-        log::debug!("Setting mass ({mass}) and center of mass {center_of_mass:?} for node {index:?}");
+        log::info!("Setting mass ({mass}) and center of mass {center_of_mass:?} for node {index:?}");
         if let QuadtreeNode::Internal(region) = quadtree.get_mut(index).expect("Internal node does not exist") {
             *region = Some(Region { mass, center_of_mass });
         }
     }
 
-    /// Calculate the forces on an object of a given mass at a given point.
-    pub fn force_at_point(&self, point: Vec2d, mass: f64) -> Vec2d {
-        self.force_at_point_inner(point, mass, HilbertIndex(0, 0))
+    /// Calculate the forces on an object of a given mass at a given point. To save an unnecessary
+    /// multiplication followed by an inevitable division when calculating the acceleration, we omit
+    /// the mass of the body since it cancels out anyway:
+    ///   Fgravity = (mass a * mass b * gravitation constant) / distance^2
+    ///   acceleration = force / mass (from F = ma)
+    pub fn acceleration_at_point(&self, point: Vec2d) -> Vec2d {
+        self.acceleration_at_point_inner(point, HilbertIndex(0, 0))
     }
 
     /// Calculate the forces on an object from a particular tree node, recursively.
-    fn force_at_point_inner(&self, point: Vec2d, mass: f64, index: HilbertIndex) -> Vec2d {
+    fn acceleration_at_point_inner(&self, point: Vec2d, index: HilbertIndex) -> Vec2d {
         let mut force = Vec2d::new(0.0, 0.0);
 
         match self.quadtree.get(index) {
@@ -200,15 +205,34 @@ impl Galaxy {
 
                 if d_squared > 0.0 {
                     let dir = diff / f64::sqrt(d_squared);
-                    let force_of_star_gravity = (mass * star.mass * GRAVITATIONAL_CONSTANT) / d_squared;
+                    let force_of_star_gravity = star.mass * GRAVITATIONAL_CONSTANT / d_squared;
 
                     force = force + dir * force_of_star_gravity;
                 }
             },
-            QuadtreeNode::Internal(_) => {
-                // If internal, we just descend deeper until we get to the leaf nodes.
-                for child_index in index.children() {
-                    force = force + self.force_at_point_inner(point, mass, child_index);
+            QuadtreeNode::Internal(region) => {
+                let region = region.as_ref()
+                    .expect(&format!("Region {index:?} uninitialised when calculating forces"));
+
+                let diff = point - region.center_of_mass;
+                let dist_squared = diff.x * diff.x + diff.y * diff.y;
+                let dist = f64::sqrt(dist_squared);
+                let node_size = GALAXY_DIAMETER / (1 << index.depth()) as f64;
+                let dir = diff / dist;
+
+                if dist > 0.0 {
+                    if (node_size/dist) < 1.0 {
+                        let force_of_gravity = region.mass * GRAVITATIONAL_CONSTANT / dist_squared;
+                        force = force + dir * force_of_gravity;
+                    }
+                    else {
+                        for child_index in index.children() {
+                            force = force + self.acceleration_at_point_inner(point, child_index);
+                        }
+                    }
+                }
+                else {
+                    panic!("Distance from center of mass of node was zero");
                 }
             },
             _ => {},
@@ -217,20 +241,60 @@ impl Galaxy {
         force
     }
 
-    /// Integrate recursively
-    fn integrate(&mut self, index: HilbertIndex) {
+    /// Integrate stars.
+    fn integrate(&mut self, time_delta: f64) {
+        let mut reinsert_list = Vec::new();
+
+        let root_index = HilbertIndex(0, 0);
+        if self.quadtree.get(root_index).is_internal() {
+            self.integrate_internal(time_delta, root_index, &mut reinsert_list);
+        }
+
+        for index in reinsert_list {
+            if self.quadtree.get(index).is_leaf() {
+                match self.quadtree.remove(index) {
+                    Some(QuadtreeNode::Leaf(star)) => {
+                        self.quadtree.add(star);
+                    },
+                    // TODO: sigh... this can happen if the node is no longer there due to rearranging.
+                    // TODO: Ok, this conceptually doesn't work. To fix this, I think we can:
+                    //   * Change the data structure so that we store all our particles in a flat
+                    //   list, and the quadtree so that it only stores indexes into this list.
+                    //   * When integrating, walk this flat list rather than the quadtree
+                    //   structure, and that way we can update the quadtree while integrating?
+                    //   * While writing this, I'm not sure if it really works anymore.. sigh. We
+                    //   probably actually need to update to a traversal scheme that updates the
+                    //   quadtree as particles move (we can do this by simply walking up the tree
+                    //   from the leaf if the particle has moved outside its bounds until we find a
+                    //   node it does fit into, and then insert it into that node recursively),
+                    //   this should be pretty fast as particles will often move to adjacent
+                    //   nodes. As we're doing this, maybe we can invalidate the region nodes we
+                    //   visit and re-calculate them lazily instead of ahead of time. This way, we
+                    //   also solve the case where inserting a node causes new regions to be
+                    //   inserted that we haven't pre-calculated yet. Alternately, perhaps we could
+                    //   just not worry that the data is a bit out of date, and descend to the leaf
+                    //   if we encounter an uninitialised region.
+                    _ => {},
+                    //_ => panic!("Reinsert list contained non-leaf node"),
+                }
+            }
+        }
+    }
+
+    /// Integrate stars in a quadtree node recursively.
+    fn integrate_internal(&mut self, time_delta: f64, index: HilbertIndex,
+                          reinsert_list: &mut Vec<HilbertIndex>)
+    {
         match self.quadtree.get(index) {
             QuadtreeNode::Leaf(star) => {
-                let force = self.force_at_point(star.position, star.mass);
-                let acceleration = force / star.mass;
-                let velocity = star.velocity + acceleration * self.time_scale;
-                let position = star.position + velocity * self.time_scale;
-                // F = ma, a = F/m
+                let acceleration = self.acceleration_at_point(star.position);
+                let velocity = star.velocity + acceleration * self.time_scale * time_delta;
+                let position = star.position + velocity * self.time_scale * time_delta;
                 if let Some(QuadtreeNode::Leaf(star)) = self.quadtree.get_mut(index) {
                     star.position = position;
                     star.velocity = velocity;
-                    //log::info!("Velocity: {:?}", star.velocity);
-                    //log::info!("Star position: {:?}", star.position);
+                    reinsert_list.push(index);
+                    log::info!("Adding leaf node {index:?} to reinsert list");
                 }
                 else {
                     panic!("Impossible?");
@@ -238,7 +302,7 @@ impl Galaxy {
             },
             QuadtreeNode::Internal(_) => {
                 for child_index in index.children() {
-                    self.integrate(child_index);
+                    self.integrate_internal(time_delta, child_index, reinsert_list);
                 }
             },
             _ => {}
@@ -255,55 +319,12 @@ impl Galaxy {
             // Create new buffer.
             let mut bytes = vec![0; 4 * TEX_WIDTH * TEX_HEIGHT];
 
-            // Fill forces in buffer.
-            //for y in 0..TEX_HEIGHT {
-            //    for x in 0..TEX_WIDTH {
-            //        let pos = Vec2d::new(x as f64 / TEX_WIDTH as f64 * 2.0 - 1.0,
-            //                            y as f64 / TEX_HEIGHT as f64 * 2.0 - 1.0);
-            //        let forces = self.force_at_point(pos, 1.0);
-
-            //        let strength = f64::sqrt(forces.x * forces.x + forces.y * forces.y);
-            //        //println!("Force at point {pos:?}: {forces:?} ({strength})");
-
-            //        let idx = 4 * (y * TEX_WIDTH + x);
-            //        let pixel = &mut bytes[idx..idx+4];
-
-            //        pixel[0] = f64::min(strength, 255.0) as u8;
-            //        pixel[1] = 0;
-            //        pixel[2] = 0;
-            //        pixel[3] = 0xFF;
-            //    }
-            //}
-
-            let mut star_count = 0;
-
             // Draw all stars in buffer.
+            let mut star_count = 0;
             let view_offset = VIEW_BOUNDS.0;
             let view_size = VIEW_BOUNDS.1 - VIEW_BOUNDS.0;
             self.quadtree.walk_nodes(|_, node| {
                 match node {
-                    QuadtreeNode::Internal(Some(_)) => {
-                        //// Calculate node box.
-                        //let (x, y) = index.to_xy();
-                        //let size = 1 << index.depth();
-                        //let box_size = Vec2d::new(TEX_WIDTH as f64 / size as f64,
-                        //                         TEX_HEIGHT as f64 / size as f64);
-                        //let box_min = Vec2d::new(box_size.x * x as f64, box_size.y * y as f64);
-                        //let box_max = Vec2d::new(box_min.x + box_size.x, box_min.y + box_size.y);
-
-                        //let mass_density = f64::min(1.0, region.mass / 20.0);
-
-                        //for y in (box_min.y as usize)..(box_max.y as usize) {
-                        //    for x in (box_min.x as usize)..(box_max.x as usize) {
-                        //        let idx = 4 * (y * TEX_WIDTH + x);
-                        //        let pixel = &mut bytes[idx..idx+4];
-                        //        pixel[0] = (mass_density * 256.0) as u8;
-                        //        pixel[1] = 0x00;
-                        //        pixel[2] = 0x00;
-                        //        pixel[3] = 0x00;
-                        //    }
-                        //}
-                    },
                     QuadtreeNode::Leaf(star) => {
                         // Normalize position to texture coordinates.
                         let mut pos = star.position - view_offset;
@@ -352,18 +373,18 @@ impl Galaxy {
 
 impl Drawable for Galaxy {
     /// Update the galaxy.
-    fn update(&mut self, ctx: &mut Context) {
-        for _ in 0..5 {
-            self.integrate(HilbertIndex(0, 0));
-        }
+    fn update(&mut self, ctx: &mut Context, time_delta: f64) {
+        Self::update_mass_distribution(&mut self.quadtree);
+        self.integrate(time_delta);
         self.texture_dirty = true;
-        self.update_texture(ctx);
     }
 
     /// Draw the galaxy.
     fn draw(&mut self, ctx: &mut Context) {
         self.update_texture(ctx);
         self.textured_quad.draw(ctx);
-        //self.quadtree.debug_draw(ctx);
+        if DEBUG_DRAW_QUADTREE {
+            self.quadtree.debug_draw(ctx);
+        }
     }
 }

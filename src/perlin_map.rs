@@ -4,6 +4,7 @@ use miniquad::Context;
 use noise::{Fbm, Perlin};
 use noise::utils::{NoiseMapBuilder, PlaneMapBuilder};
 
+use crate::drawable::Drawable;
 use crate::primitives::TexturedQuad;
 
 /// A structure representing the rendering of a patch of perlin noise.
@@ -37,12 +38,14 @@ impl PerlinMap {
             textured_quad,
         })
     }
+}
 
+impl Drawable for PerlinMap {
     /// Update the perlin map.
-    pub fn update(&mut self, _ctx: &mut Context) {}
+    fn update(&mut self, _ctx: &mut Context, _time_delta: f64) {}
 
     /// Draw the perlin map.
-    pub fn draw(&mut self, ctx: &mut Context) {
+    fn draw(&mut self, ctx: &mut Context) {
         self.textured_quad.draw(ctx);
     }
 }
