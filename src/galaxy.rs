@@ -20,7 +20,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 5000;
+const STAR_COUNT: usize = 1000;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;

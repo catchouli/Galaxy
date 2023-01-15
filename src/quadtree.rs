@@ -6,6 +6,31 @@ use crate::hilbert::HilbertIndex;
 
 const BLOCK_SIZE: usize = 2000;
 
+/// TODO: it might be good for the quadtree to own the list of T so that it can also maintain a map
+/// of the current leaf node location of each item. That way, when updating items, we can automatically
+/// check if they've moved outside of their current parent node bounds and move them appropriately.
+///
+/// TODO: I think it's also good if the tree itself is an actual tree data structure, and refers to
+/// nodes only by this index. That way the tree structure itself can be sparse without using
+/// potentially an insane amount of memory for deep trees (for example 16 levels deep should be
+/// reasonable as that results in about a 1 parsec grid size on galactic scales). Currently a tree
+/// this deep uses many gigabytes of memory, even with the block size above.
+///
+/// TODO: finally, it might also be a good idea that the leaf nodes contain a list of items rather
+/// than a single item, and that we use a different heuristic for splitting, maybe number of nodes.
+/// This keeps our tree structure a reasonable size, but may make the results a little less
+/// accurate or the N-body algorithm a little less efficient.
+///
+/// TODO: we should probably handle fully removing nodes from the tree and remove them from the
+/// flat list too at some point (e.g. if the particle goes outside of the qaudtree bounds we
+/// probably need to do that unless we want to re-create it with new bounds.) For now these nodes
+/// just keep existing in the flat list but are not in the tree structure, which is a space leak.
+
+/// The type for node indexes into our flat list. The way our quadtree works is that we store all
+/// items in a flat list that also works as a lookup table for the item's current location in the
+/// tree, and this type indexes into that list.
+type NodeIndex = usize;
+
 /// A trait for objects with a position.
 pub trait Spatial {
     fn xy(&self) -> &Vec2d;
@@ -139,7 +164,8 @@ impl<T: Spatial, Internal: Default> Quadtree<T, Internal> {
         // If item is outside the bounds of the quadtree, do nothing.
         let pos = item.xy();
         if pos.x < self.min.x || pos.x > self.max.x || pos.y < self.min.y || pos.y > self.max.y {
-            log::warn!("Item at position {pos:?} is outside of quadtree area, discarding");
+            // TODO: re-add this?
+            //log::warn!("Item at position {pos:?} is outside of quadtree area, discarding");
             return;
         }
 
