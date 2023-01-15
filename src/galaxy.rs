@@ -29,7 +29,7 @@ const STAR_MASS_MIN: f64 = 0.1;
 const STAR_MASS_MAX: f64 = 10.0;
 
 /// The star's initial speed in parsecs/second.
-const STAR_INITIAL_SPEED: f64 = 50.0;
+const STAR_INITIAL_SPEED: f64 = 30.0;
 
 /// The mass of a supermassive black hole at a galaxy's core, in solar masses.
 const SUPERMASSIVE_BLACK_HOLE_MASS: f64 = 4e6;
@@ -96,7 +96,7 @@ pub struct Galaxy {
     /// The galaxy's quadtree. We store the stars as leaf nodes in the octree, and have an
     /// additional type Region for the internal nodes, which we use to accelerate n-body lookups.
     /// It's wrapped in an Option so it can be initialised lazily.
-    pub quadtree: Quadtree<Particle, Option<Region>>,
+    pub quadtree: Quadtree<Particle, Region>,
 }
 
 impl Galaxy {
@@ -156,7 +156,7 @@ impl Galaxy {
         })
     }
 
-    pub fn update_mass_distribution(quadtree: &mut Quadtree<Particle, Option<Region>>,
+    pub fn update_mass_distribution(quadtree: &mut Quadtree<Particle, Region>,
                                     stars: &Vec<Star>) {
         // Update mass distributions recursively. We only need to do this if the root node is an
         // internal node. If it's a leaf node then nothing needs doing, if it's empty then nothing
@@ -167,7 +167,7 @@ impl Galaxy {
         }
     }
 
-    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Particle, Option<Region>>,
+    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Particle, Region>,
                                       stars: &Vec<Star>,
                                       index: HilbertIndex)
     {
@@ -184,14 +184,17 @@ impl Galaxy {
 
             // Update our mass and weighted center of mass.
             match quadtree.get(child_index) {
-                QuadtreeNode::Internal(region) => {
+                &QuadtreeNode::Internal(region_index) => {
                     // All child regions should be initialised now due to recursion.
-                    let region = region.as_ref().expect("Internal error: child region not initialised");
+                    let region = quadtree.get_internal(region_index)
+                        .expect(&format!("Internal error: child region {region_index:?} not initialised"));
                     mass += region.mass;
                     center_of_mass.x += region.mass * region.center_of_mass.x;
                     center_of_mass.y += region.mass * region.center_of_mass.y;
                 },
-                QuadtreeNode::Leaf(particle) => {
+                &QuadtreeNode::Leaf(item_index) => {
+                    let particle = quadtree.get_item(item_index)
+                        .expect("Internal error: failed to get particle from leaf node");
                     let star = &stars[particle.index];
                     mass += star.mass;
                     center_of_mass.x += star.position.x;
@@ -207,8 +210,9 @@ impl Galaxy {
             center_of_mass.y /= mass;
         }
 
-        if let QuadtreeNode::Internal(region) = quadtree.get_mut(index).expect("Internal node does not exist") {
-            *region = Some(Region { mass, center_of_mass });
+        if let &QuadtreeNode::Internal(region_index) = quadtree.get(index) {
+            let internal = Region { mass, center_of_mass };
+            quadtree.set_internal(region_index, Some(internal));
         }
     }
 
@@ -226,7 +230,9 @@ impl Galaxy {
         let mut force = Vec2d::new(0.0, 0.0);
 
         match self.quadtree.get(index) {
-            QuadtreeNode::Leaf(particle) => {
+            &QuadtreeNode::Leaf(particle_index) => {
+                let particle = self.quadtree.get_item(particle_index)
+                    .expect("Failed to get particle");
                 let star = &self.stars[particle.index];
 
                 // If the star is at the same position as the point, we should ignore it as it's
@@ -242,8 +248,8 @@ impl Galaxy {
                     force = force + dir * force_of_star_gravity;
                 }
             },
-            QuadtreeNode::Internal(region) => {
-                let region = region.as_ref()
+            &QuadtreeNode::Internal(region_index) => {
+                let region = self.quadtree.get_internal(region_index)
                     .expect(&format!("Region {index:?} uninitialised when calculating forces"));
 
                 let diff = region.center_of_mass - point;
@@ -300,7 +306,9 @@ impl Galaxy {
             let view_size = VIEW_BOUNDS.1 - VIEW_BOUNDS.0;
             self.quadtree.walk_nodes(|_, node| {
                 match node {
-                    QuadtreeNode::Leaf(particle) => {
+                    &QuadtreeNode::Leaf(particle_index) => {
+                        let particle = self.quadtree.get_item(particle_index)
+                            .expect("Failed to get particle");
                         let star = &self.stars[particle.index];
 
                         // Normalize position to texture coordinates.
