@@ -21,7 +21,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 1000;
+const STAR_COUNT: usize = 50000;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -29,15 +29,12 @@ const STAR_MASS_MIN: f64 = 0.1;
 /// The maximum mass of each star, in solar masses.
 const STAR_MASS_MAX: f64 = 10.0;
 
-/// The star's initial speed in parsecs/second.
-const STAR_INITIAL_SPEED: f64 = 100.0;
-
 /// The mass of a supermassive black hole at a galaxy's core, in solar masses.
 const SUPERMASSIVE_BLACK_HOLE_MASS: f64 = 4e6;
 
-/// The gravitational constant in `parsecs * * solar mass^-1 * (km/s)^2`.
-/// https://en.wikipedia.org/wiki/Gravitational_constant
-const GRAVITATIONAL_CONSTANT: f64 = 4.30091727063;
+/// The gravitational constant in `km^2 pc Msun^-1 s^-2`.
+/// https://lweb.cfa.harvard.edu/~dfabricant/huchra/ay145/constants.html
+const GRAVITATIONAL_CONSTANT: f64 = 4.3e-3;
 
 /// Diameter of the galaxy in parsecs.
 const GALAXY_DIAMETER: f64 = 32408.0;
@@ -46,10 +43,10 @@ const GALAXY_DIAMETER: f64 = 32408.0;
 const GALAXY_RADIUS: f64 = GALAXY_DIAMETER / 2.0;
 
 /// Time scale of the simulation.
-const INITIAL_TIME_SCALE: f64 = 100.0;
+const INITIAL_TIME_SCALE: f64 = 1000.0;
 
 /// Minimum distance^2 in gravity calculation, below which it is clamped to this value.
-const MIN_GRAVITY_DISTANCE_SQUARED: f64 = 1e5;
+const MIN_GRAVITY_DISTANCE_SQUARED: f64 = 0.0;
 
 /// Whether to draw the debug overlay for the quadtree.
 const DEBUG_DRAW_QUADTREE: bool = false;
@@ -109,20 +106,25 @@ impl Galaxy {
             let mass = rng.gen_range(STAR_MASS_MIN..STAR_MASS_MAX);
 
             // Generate position with angle/distance from center.
-            //let angle = rng.gen_range(0.0..(PI*2.0));
-            //let distance_from_center = rng.gen_range(0.0..GALAXY_RADIUS);
-            //let position = Vec2d::new(f64::sin(angle) * distance_from_center,
-            //                          f64::cos(angle) * distance_from_center);
+            let angle = rng.gen_range(0.0..(PI*2.0));
+            // Quantize angle for arms.
+            let distance_from_center = rng.gen_range(0.0..GALAXY_RADIUS);
+            let position = Vec2d::new(f64::sin(angle) * distance_from_center,
+                                      f64::cos(angle) * distance_from_center);
+
+            // Calculate speed for orbit at this radius.
+            // https://www.nagwa.com/en/explainers/142168516704/
+            let speed = f64::sqrt(GRAVITATIONAL_CONSTANT * SUPERMASSIVE_BLACK_HOLE_MASS / distance_from_center);
 
             // Generate position in a rectangle.
-            let position_bounds = (-GALAXY_RADIUS)..GALAXY_RADIUS;
-            let position = Vec2d::new(rng.gen_range(position_bounds.clone()),
-                                      rng.gen_range(position_bounds));
+            //let position_bounds = (-GALAXY_RADIUS)..GALAXY_RADIUS;
+            //let position = Vec2d::new(rng.gen_range(position_bounds.clone()),
+            //                          rng.gen_range(position_bounds));
 
             // Figure out direction perpendicular to center.
             let angle = f64::atan2(position.x, position.y) + PI / 2.0;
             let direction = Vec2d::new(f64::sin(angle), f64::cos(angle));
-            let velocity = direction * STAR_INITIAL_SPEED;
+            let velocity = direction * speed;
 
             // Add star to flat list and quadtree.
             quadtree.add(Star { position, velocity, mass });
@@ -228,7 +230,8 @@ impl Galaxy {
                                          diff.x * diff.x + diff.y * diff.y);
 
                 if d_squared > 0.0 {
-                    let dir = diff / f64::sqrt(d_squared);
+                    let dist = f64::sqrt(d_squared);
+                    let dir = diff / dist;
                     let force_of_star_gravity = star.mass * GRAVITATIONAL_CONSTANT / d_squared;
 
                     force = force + dir * force_of_star_gravity;
@@ -244,7 +247,7 @@ impl Galaxy {
                 let node_size = GALAXY_DIAMETER / (1 << index.depth()) as f64;
                 let dir = diff / dist;
 
-                if dist > 0.0 && (node_size/dist) < 1.0 {
+                if dist != 0.0 && node_size / dist > 1.0 {
                     let force_of_gravity = region.mass * GRAVITATIONAL_CONSTANT / dist_squared;
                     force = force + dir * force_of_gravity;
                 }
@@ -263,7 +266,9 @@ impl Galaxy {
     /// Integrate stars.
     fn integrate(&mut self, time_delta: f64) {
         // Integrate all star velocities and positions.
-        for i in 0..self.quadtree.items.len() {
+        // TODO: integrating the black hole breaks it and makes it disappear, it's not really
+        // necessary but it would be nice to work out why :)
+        for i in 1..self.quadtree.items.len() {
             // Calculate forces for star.
             let star = &self.quadtree.items[i];
             let acceleration = Self::acceleration_at_point(&self.quadtree, star.position);
@@ -304,7 +309,7 @@ impl Galaxy {
                         let x = (pos.x * TEX_WIDTH as f64) as usize;
                         let y = (pos.y * TEX_HEIGHT as f64) as usize;
 
-                        if star.mass < 1000000.0 {
+                        if true || star.mass < SUPERMASSIVE_BLACK_HOLE_MASS * 2.0 {
                             if x < TEX_WIDTH && y < TEX_HEIGHT {
                                 // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
                                 let idx = 4 * (y * TEX_WIDTH + x);
@@ -313,7 +318,7 @@ impl Galaxy {
                                 let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
                                                           255.0) as u8;
 
-                                if star_count > 25 {
+                                if star_count > 0 {
                                     pixel[0] = brightness;
                                     pixel[1] = brightness;
                                     pixel[2] = brightness;
