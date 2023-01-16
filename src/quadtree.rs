@@ -1,10 +1,9 @@
+use std::collections::HashMap;
 use std::{error::Error, collections::VecDeque};
 
 use crate::{types::Vec2d, drawable::DebugDrawable, primitives::WireframeQuad};
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
-
-const BLOCK_SIZE: usize = 2000;
 
 /// TODO: it might be good for the quadtree to own the list of T so that it can also maintain a map
 /// of the current leaf node location of each item. That way, when updating items, we can automatically
@@ -40,19 +39,11 @@ pub trait Spatial {
 /// where we can stop traversal).
 #[derive(PartialEq)]
 pub enum QuadtreeNode {
-    Empty,
     Internal(NodeIndex),
     Leaf(NodeIndex)
 }
 
 impl QuadtreeNode {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            QuadtreeNode::Empty => true,
-            _ => false,
-        }
-    }
-
     pub fn is_leaf(&self) -> bool {
         match self {
             QuadtreeNode::Leaf(_) => true,
@@ -71,7 +62,6 @@ impl QuadtreeNode {
 impl core::fmt::Debug for QuadtreeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Empty => write!(f, "Empty"),
             Self::Internal(index) => f.debug_tuple("Internal").field(index).finish(),
             Self::Leaf(index) => f.debug_tuple("Leaf").field(index).finish(),
         }
@@ -98,8 +88,7 @@ pub struct Quadtree<T: Spatial, Internal = ()> {
     internal: Vec<Option<Internal>>,
 
     /// The quadtree nodes, as a flat list.
-    blocks: Vec<Option<Vec<QuadtreeNode>>>,
-    //nodes: Vec<QuadtreeNode<T, Internal>>,
+    nodes: HashMap<HilbertIndex, QuadtreeNode>,
 
     /// A wireframe quad primitive for debug drawing.
     wireframe_quad: Option<WireframeQuad>,
@@ -113,7 +102,7 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
             max,
             items: Vec::new(),
             internal: Vec::new(),
-            blocks: Vec::new(),
+            nodes: HashMap::new(),
             wireframe_quad: None,
         })
     }
@@ -135,60 +124,48 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
         self.internal[index] = value;
     }
 
-    pub fn get(&self, index: HilbertIndex) -> &QuadtreeNode {
-        let index = index.array_index();
-        let block = index / BLOCK_SIZE;
-        let index_in_block = index - (block * BLOCK_SIZE);
+    pub fn get(&self, index: HilbertIndex) -> Option<&QuadtreeNode> {
+        self.nodes.get(&index)
+        //let index = index.array_index();
+        //let block = index / BLOCK_SIZE;
+        //let index_in_block = index - (block * BLOCK_SIZE);
 
-        match self.blocks.get(block) {
-            Some(Some(block)) => block.get(index_in_block).unwrap_or(&QuadtreeNode::Empty),
-            _ => &QuadtreeNode::Empty,
-        }
+        //match self.blocks.get(block) {
+        //    Some(Some(block)) => block.get(index_in_block).unwrap_or(&QuadtreeNode::Empty),
+        //    _ => &QuadtreeNode::Empty,
+        //}
     }
 
     pub fn get_mut(&mut self, index: HilbertIndex) -> Option<&mut QuadtreeNode> {
-        let index = index.array_index();
-        let block = index / BLOCK_SIZE;
-        let index_in_block = index - (block * BLOCK_SIZE);
+        self.nodes.get_mut(&index)
+        //let index = index.array_index();
+        //let block = index / BLOCK_SIZE;
+        //let index_in_block = index - (block * BLOCK_SIZE);
 
-        match self.blocks.get_mut(block) {
-            Some(Some(block)) => block.get_mut(index_in_block),
-            _ => None,
-        }
-    }
-
-    /// Integrate over all the items in the Quadtree in O(n) time, allowing them to be mutated. If
-    /// the item moves outside of the bounds of its resident quadtree node, it will be automatically
-    /// relocated to an appropriate position.
-    pub fn integrate<F>(&mut self, mut f: F)
-        where F: FnMut(&mut T) -> ()
-    {
-        for item in &mut self.items {
-            // Mutate the item (potentially).
-            f(item);
-
-            // Check that it still fits within the bounds of its quadtree node, and reinsert it at
-            // the right place if not.
-        }
+        //match self.blocks.get_mut(block) {
+        //    Some(Some(block)) => block.get_mut(index_in_block),
+        //    _ => None,
+        //}
     }
 
     /// Safely insert a node at an index, resizing the internal vector if necessary.
     fn safe_insert(&mut self, index: HilbertIndex, node: QuadtreeNode) {
-        let index = index.array_index();
-        let block = index / BLOCK_SIZE;
-        let index_in_block = index - (block * BLOCK_SIZE);
+        self.nodes.insert(index, node);
+        //let index = index.array_index();
+        //let block = index / BLOCK_SIZE;
+        //let index_in_block = index - (block * BLOCK_SIZE);
 
-        if self.blocks.len() <= block {
-            self.blocks.resize_with(block + 1, Default::default);
-        }
+        //if self.blocks.len() <= block {
+        //    self.blocks.resize_with(block + 1, Default::default);
+        //}
 
-        let block = self.blocks[block].get_or_insert_with(|| {
-            let mut block = Vec::new();
-            block.resize_with(BLOCK_SIZE, || QuadtreeNode::Empty);
-            block
-        });
+        //let block = self.blocks[block].get_or_insert_with(|| {
+        //    let mut block = Vec::new();
+        //    block.resize_with(BLOCK_SIZE, || QuadtreeNode::Empty);
+        //    block
+        //});
 
-        block[index_in_block] = node;
+        //block[index_in_block] = node;
     }
 
     /// Add a new item to the quadtree.
@@ -210,7 +187,7 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
 
         // If it's empty, (e.g. in the case where this is the first item added to the tree), we can
         // just add this node directly to the specified index.
-        if self.get(insert_pos).is_empty() {
+        if self.get(insert_pos).is_none() {
             log::trace!("Inserting first node into tree at index {insert_pos:?}");
             self.safe_insert(insert_pos, QuadtreeNode::Leaf(index));
             return;
@@ -233,7 +210,13 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
 
         // If the current node is an internal node (as opposed to a leaf or an empty node), we have
         // to keep searching.
-        while self.get(cur_index).is_internal() {
+        loop {
+            // If the current node is empty or a leaf node, we can insert here (splitting if necessary).
+            let cur_node = self.get(cur_index);
+            if cur_node.is_none() || cur_node.unwrap().is_leaf() {
+                break;
+            }
+
             // Find out which quadrant the item is and descend into the tree.
             let cur_center = cur_max * 0.5 + cur_min * 0.5;
             let (quadrant_x, quadrant_y) = Self::quadrant(&cur_center, pos);
@@ -377,7 +360,7 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
                     let child_index = HilbertIndex(hilbert_index.index() * 4 + i, depth + 1);
                     let child_node = self.get(child_index);
 
-                    if !child_node.is_empty() {
+                    if child_node.is_some() {
                         stack.push_back(child_index);
                     }
                 }
@@ -390,7 +373,9 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
         where F: FnMut(HilbertIndex, &QuadtreeNode) -> ()
     {
         self.walk_indices(|index| {
-            f(index, self.get(index));
+            if let Some(node) = self.get(index) {
+                f(index, node);
+            }
         });
     }
 }
