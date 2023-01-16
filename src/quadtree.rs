@@ -92,7 +92,7 @@ pub struct Quadtree<T: Spatial, Internal = ()> {
     max: Vec2d,
 
     /// Items stored in the quadtree as a flat list, along with the node index they're in.
-    items: Vec<T>,
+    pub items: Vec<T>,
 
     /// Internal node values in the quadtree.
     internal: Vec<Option<Internal>>,
@@ -154,6 +154,21 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
         match self.blocks.get_mut(block) {
             Some(Some(block)) => block.get_mut(index_in_block),
             _ => None,
+        }
+    }
+
+    /// Integrate over all the items in the Quadtree in O(n) time, allowing them to be mutated. If
+    /// the item moves outside of the bounds of its resident quadtree node, it will be automatically
+    /// relocated to an appropriate position.
+    pub fn integrate<F>(&mut self, mut f: F)
+        where F: FnMut(&mut T) -> ()
+    {
+        for item in &mut self.items {
+            // Mutate the item (potentially).
+            f(item);
+
+            // Check that it still fits within the bounds of its quadtree node, and reinsert it at
+            // the right place if not.
         }
     }
 

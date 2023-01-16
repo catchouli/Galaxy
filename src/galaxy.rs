@@ -66,18 +66,6 @@ impl Spatial for Star {
     }
 }
 
-/// A particle in a leaf node in the quadtree, which points to a star by index.
-pub struct Particle {
-    index: usize,
-    position: Vec2d,
-}
-
-impl Spatial for Particle {
-    fn xy(&self) -> &Vec2d {
-        &self.position
-    }
-}
-
 /// A region in our galaxy, in the quadtree. We use this to accelerate n-body calculations.
 pub struct Region {
     center_of_mass: Vec2d,
@@ -91,12 +79,10 @@ pub struct Galaxy {
     texture_dirty: bool,
     pub time_scale: f64,
 
-    pub stars: Vec<Star>,
-
     /// The galaxy's quadtree. We store the stars as leaf nodes in the octree, and have an
     /// additional type Region for the internal nodes, which we use to accelerate n-body lookups.
     /// It's wrapped in an Option so it can be initialised lazily.
-    pub quadtree: Quadtree<Particle, Region>,
+    pub quadtree: Quadtree<Star, Region>,
 }
 
 impl Galaxy {
@@ -105,20 +91,16 @@ impl Galaxy {
         // Create textured quad for drawing stars.
         let textured_quad = TexturedQuad::new(ctx, TEX_WIDTH, TEX_HEIGHT)?;
 
-        // Create stars flat list.
-        let mut stars = Vec::new();
-
         // Create quadtree.
         let mut quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS, -GALAXY_RADIUS),
                                          Vec2d::new(GALAXY_RADIUS, GALAXY_RADIUS))?;
 
         // Add supermassive black hole at center of galaxy.
-        stars.push(Star {
+        quadtree.add(Star {
             position: Vec2d::new(0.0, 0.0),
             velocity: Vec2d::new(0.0, 0.0),
             mass: SUPERMASSIVE_BLACK_HOLE_MASS,
         });
-        quadtree.add(Particle { index: 0, position: stars[0].position });
 
         // Generate stars.
         for _ in 0..STAR_COUNT {
@@ -140,11 +122,9 @@ impl Galaxy {
             let angle = f64::atan2(position.x, position.y) + PI / 2.0;
             let direction = Vec2d::new(f64::sin(angle), f64::cos(angle));
             let velocity = direction * STAR_INITIAL_SPEED;
-            let star_index = stars.len();
 
             // Add star to flat list and quadtree.
-            stars.push(Star { position, velocity, mass });
-            quadtree.add(Particle { index: star_index, position: stars[star_index].position });
+            quadtree.add(Star { position, velocity, mass });
         }
 
         Ok(Self {
@@ -152,23 +132,20 @@ impl Galaxy {
             texture_dirty: true,
             time_scale: INITIAL_TIME_SCALE,
             quadtree,
-            stars,
         })
     }
 
-    pub fn update_mass_distribution(quadtree: &mut Quadtree<Particle, Region>,
-                                    stars: &Vec<Star>) {
+    pub fn update_mass_distribution(quadtree: &mut Quadtree<Star, Region>) {
         // Update mass distributions recursively. We only need to do this if the root node is an
         // internal node. If it's a leaf node then nothing needs doing, if it's empty then nothing
         // needs doing.
         let root_index = HilbertIndex(0, 0);
         if quadtree.get(root_index).is_internal() {
-            Self::update_mass_distribution_inner(quadtree, stars, root_index);
+            Self::update_mass_distribution_inner(quadtree, root_index);
         }
     }
 
-    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Particle, Region>,
-                                      stars: &Vec<Star>,
+    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Star, Region>,
                                       index: HilbertIndex)
     {
         // Update all children recursively, and then sum up their masses and produce a weighted
@@ -179,7 +156,7 @@ impl Galaxy {
         for child_index in index.children() {
             // If the child node is itself an internal node, we need to recurse deeper
             if quadtree.get(child_index).is_internal() {
-                Self::update_mass_distribution_inner(quadtree, stars, child_index);
+                Self::update_mass_distribution_inner(quadtree, child_index);
             }
 
             // Update our mass and weighted center of mass.
@@ -193,9 +170,8 @@ impl Galaxy {
                     center_of_mass.y += region.mass * region.center_of_mass.y;
                 },
                 &QuadtreeNode::Leaf(item_index) => {
-                    let particle = quadtree.get_item(item_index)
+                    let star = quadtree.get_item(item_index)
                         .expect("Internal error: failed to get particle from leaf node");
-                    let star = &stars[particle.index];
                     mass += star.mass;
                     center_of_mass.x += star.position.x;
                     center_of_mass.y += star.position.y;
@@ -230,10 +206,9 @@ impl Galaxy {
         let mut force = Vec2d::new(0.0, 0.0);
 
         match self.quadtree.get(index) {
-            &QuadtreeNode::Leaf(particle_index) => {
-                let particle = self.quadtree.get_item(particle_index)
+            &QuadtreeNode::Leaf(item_index) => {
+                let star = self.quadtree.get_item(item_index)
                     .expect("Failed to get particle");
-                let star = &self.stars[particle.index];
 
                 // If the star is at the same position as the point, we should ignore it as it's
                 // probably the object itself, and otherwise we'll end up dividing by zero anyway.
@@ -277,11 +252,11 @@ impl Galaxy {
     /// Integrate stars.
     fn integrate(&mut self, time_delta: f64) {
         // Integrate all star velocities and positions.
-        for i in 0..self.stars.len() {
-            let star_position = self.stars[i].position;
+        for i in 0..self.quadtree.items.len() {
+            let star_position = self.quadtree.items[i].position;
             let acceleration = self.acceleration_at_point(star_position);
 
-            let star = &mut self.stars[i];
+            let star = &mut self.quadtree.items[i];
             let velocity = star.velocity + acceleration * self.time_scale * time_delta;
             let position = star.position + velocity * self.time_scale * time_delta;
 
@@ -306,10 +281,9 @@ impl Galaxy {
             let view_size = VIEW_BOUNDS.1 - VIEW_BOUNDS.0;
             self.quadtree.walk_nodes(|_, node| {
                 match node {
-                    &QuadtreeNode::Leaf(particle_index) => {
-                        let particle = self.quadtree.get_item(particle_index)
+                    &QuadtreeNode::Leaf(item_index) => {
+                        let star = self.quadtree.get_item(item_index)
                             .expect("Failed to get particle");
-                        let star = &self.stars[particle.index];
 
                         // Normalize position to texture coordinates.
                         let mut pos = star.position - view_offset;
@@ -359,15 +333,17 @@ impl Galaxy {
 impl Drawable for Galaxy {
     /// Update the galaxy.
     fn update(&mut self, _ctx: &mut Context, time_delta: f64) {
+        let stars = std::mem::replace(&mut self.quadtree.items, Vec::new());
+
         // Lets just make a new quadtree every time...
         self.quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS, -GALAXY_RADIUS),
                                       Vec2d::new(GALAXY_RADIUS, GALAXY_RADIUS)).unwrap();
 
-        for i in 0..self.stars.len() {
-            self.quadtree.add(Particle { index: i, position: self.stars[i].position });
+        for star in stars {
+            self.quadtree.add(star);
         }
 
-        Self::update_mass_distribution(&mut self.quadtree, &self.stars);
+        Self::update_mass_distribution(&mut self.quadtree);
         self.integrate(time_delta);
         self.texture_dirty = true;
     }

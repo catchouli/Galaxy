@@ -1,3 +1,5 @@
+use crate::types::Vec2d;
+
 /// A hilbert index type that represents a 32-bit one-dimensional spatial index and an 8-bit tree depth.
 /// For example, (0, 0) would be the root node of a quad tree, while (0..4, 1) would be its 4^1 child nodes,
 /// and then (0..16, 2) would be the 4^2 nodes on the next level.
@@ -114,6 +116,24 @@ impl HilbertIndex {
             HilbertIndex(child_offset + 2, child_depth),
             HilbertIndex(child_offset + 3, self.depth() + 1)
         ]
+    }
+
+    /// Get the bounds referred to by this hilbert index, assuming a given root node's bounds.
+    pub fn bounds(&self, root_min: Vec2d, root_max: Vec2d) -> (Vec2d, Vec2d) {
+        // Get the x, y coordinates of this node.
+        let (x, y) = self.to_xy();
+
+        // Get the node scale at this depth in a normalized range, where the root node is scale 1,
+        // the nodes under it scale 0.5, etc.
+        let node_scale = 1.0 / (1 << self.depth()) as f64;
+
+        // The actual dimensions of nodes at this depth.
+        let node_size = (root_max - root_min) * node_scale;
+
+        let min = root_min + Vec2d::new(node_size.x * x as f64, node_size.y * y as f64);
+        let max = min + node_size;
+
+        (min, max)
     }
 
     /// Rotate/flip a quadrant appropriately.
@@ -245,6 +265,31 @@ mod test {
         assert_eq!(HilbertIndex(0, 3).array_index(), DEPTH_OFFSETS[3]);
         assert_eq!(HilbertIndex(0, 4).array_index(), DEPTH_OFFSETS[4]);
         assert_eq!(HilbertIndex(0, 5).array_index(), DEPTH_OFFSETS[5]);
+    }
+
+    #[test]
+    fn hilbert_node_bounds() {
+        // Simple tests for root node.
+        assert_eq!(HilbertIndex(0, 0).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)));
+        assert_eq!(HilbertIndex(0, 0).bounds(Vec2d::new(-1.0, -1.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(-1.0, -1.0), Vec2d::new(1.0, 1.0)));
+        assert_eq!(HilbertIndex(0, 0).bounds(Vec2d::new(-569.0, 2001.0), Vec2d::new(-590.0, -400.0)),
+            (Vec2d::new(-569.0, 2001.0), Vec2d::new(-590.0, -400.0)));
+
+        assert_eq!(HilbertIndex(0, 1).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.0, 0.0), Vec2d::new(0.5, 0.5)));
+        assert_eq!(HilbertIndex(1, 1).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.0, 0.5), Vec2d::new(0.5, 1.0)));
+        assert_eq!(HilbertIndex(2, 1).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.5, 0.5), Vec2d::new(1.0, 1.0)));
+        assert_eq!(HilbertIndex(3, 1).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.5, 0.0), Vec2d::new(1.0, 0.5)));
+
+        assert_eq!(HilbertIndex(5, 2).bounds(Vec2d::new(0.0, 0.0), Vec2d::new(1.0, 1.0)),
+            (Vec2d::new(0.0, 0.75), Vec2d::new(0.25, 1.0)));
+        assert_eq!(HilbertIndex(5, 2).bounds(Vec2d::new(-32000.0, -32000.0), Vec2d::new(64000.0, 64000.0)),
+            (Vec2d::new(-32000.0, 40000.0), Vec2d::new(-8000.0, 64000.0)));
     }
 
     quickcheck! {
