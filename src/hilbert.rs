@@ -119,7 +119,7 @@ impl HilbertIndex {
     }
 
     /// Get the bounds referred to by this hilbert index, assuming a given root node's bounds.
-    pub fn _bounds(&self, root_min: Vec2d, root_max: Vec2d) -> (Vec2d, Vec2d) {
+    pub fn bounds(&self, root_min: Vec2d, root_max: Vec2d) -> (Vec2d, Vec2d) {
         // Get the x, y coordinates of this node.
         let (x, y) = self.to_xy();
 

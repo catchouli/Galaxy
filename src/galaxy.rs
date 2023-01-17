@@ -2,10 +2,12 @@ use std::error::Error;
 use std::f64::consts::PI;
 use std::time::Instant;
 
+use imgui::TreeNodeFlags;
 use miniquad::*;
 use rand::Rng;
 use crate::hilbert::HilbertIndex;
 use crate::drawable::*;
+use crate::input::InputState;
 use crate::types::Vec2d;
 use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
@@ -20,7 +22,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 100;
+const STAR_COUNT: usize = 5;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -53,6 +55,33 @@ const DEBUG_DRAW_QUADTREE: bool = false;
 /// How many stars to highlight in red for debugging purposes.
 const HIGHLIGHT_RED_STAR_COUNT: usize = 0;
 
+/// How fast the camera zooms (per mouse wheel click, which probably isn't consistent between
+/// mousewheels but oh well.)
+const CAMERA_ZOOM_SPEED: f64 = 1.0 / 200.0;
+
+/// A simple "camera" (just a position, default viewport width and height, and zoom level).
+struct Camera {
+    position: Vec2d,
+    viewport_dimensions: Vec2d,
+    zoom_level: f64,
+    locked_star: Option<usize>,
+    highlighted_star: usize,
+    right_mouse_down_prev: bool,
+}
+
+impl Camera {
+    fn new() -> Self {
+        Self {
+            position: VIEW_BOUNDS.0 * 0.5 + VIEW_BOUNDS.1 * 0.5,
+            viewport_dimensions: VIEW_BOUNDS.1 - VIEW_BOUNDS.0,
+            zoom_level: 0.0,
+            locked_star: None,
+            highlighted_star: 0,
+            right_mouse_down_prev: false,
+        }
+    }
+}
+
 /// A single star in our galaxy.
 pub struct Star {
     position: Vec2d,
@@ -83,6 +112,10 @@ pub struct Galaxy {
     /// additional type Region for the internal nodes, which we use to accelerate n-body lookups.
     /// It's wrapped in an Option so it can be initialised lazily.
     pub quadtree: Quadtree<Star, Region>,
+
+    /// The simple "camera" containing the parameters to render the galaxy (such as viewport
+    /// position).
+    camera: Camera,
 }
 
 impl Galaxy {
@@ -140,6 +173,7 @@ impl Galaxy {
             texture_dirty: true,
             time_scale: INITIAL_TIME_SCALE,
             quadtree,
+            camera: Camera::new(),
         })
     }
 
@@ -288,7 +322,7 @@ impl Galaxy {
     /// Update the texture if the dirty flag is set.
     pub fn update_texture(&mut self, ctx: &mut Context) {
         if self.texture_dirty {
-            log::info!("Updating star texture");
+            log::debug!("Updating star texture");
 
             self.texture_dirty = false;
 
@@ -297,67 +331,175 @@ impl Galaxy {
 
             // Draw all stars in buffer.
             let mut star_count = 0;
-            let view_offset = VIEW_BOUNDS.0;
-            let view_size = VIEW_BOUNDS.1 - VIEW_BOUNDS.0;
-            self.quadtree.walk_nodes(|_, node| {
-                match node {
-                    &QuadtreeNode::Leaf(item_index) => {
-                        let star = self.quadtree.get_item(item_index)
-                            .expect("Failed to get star");
+            let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
+            let view_size = self.camera.viewport_dimensions / zoom_scale;
+            let view_offset = self.camera.position - view_size * 0.5;
+            for (i, star) in self.quadtree.items.iter().enumerate() {
+                // Normalize position to texture coordinates.
+                let mut pos = star.position - view_offset;
+                pos.x /= view_size.x;
+                pos.y /= view_size.y;
 
-                        // Normalize position to texture coordinates.
-                        let mut pos = star.position - view_offset;
-                        pos.x /= view_size.x;
-                        pos.y /= view_size.y;
+                // Convert to pixel coordinates in our texture.
+                let x = (pos.x * TEX_WIDTH as f64) as usize;
+                let y = (pos.y * TEX_HEIGHT as f64) as usize;
 
-                        // Convert to pixel coordinates in our texture.
-                        let x = (pos.x * TEX_WIDTH as f64) as usize;
-                        let y = (pos.y * TEX_HEIGHT as f64) as usize;
+                if true || star.mass < SUPERMASSIVE_BLACK_HOLE_MASS * 2.0 {
+                    if x < TEX_WIDTH && y < TEX_HEIGHT {
+                        // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
+                        let idx = 4 * (y * TEX_WIDTH + x);
+                        let pixel = &mut bytes[idx..idx+4];
 
-                        if true || star.mass < SUPERMASSIVE_BLACK_HOLE_MASS * 2.0 {
-                            if x < TEX_WIDTH && y < TEX_HEIGHT {
-                                // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
-                                let idx = 4 * (y * TEX_WIDTH + x);
-                                let pixel = &mut bytes[idx..idx+4];
+                        let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
+                        255.0) as u8;
 
-                                let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
-                                                          255.0) as u8;
-
-                                if star_count > HIGHLIGHT_RED_STAR_COUNT {
-                                    pixel[0] = brightness;
-                                    pixel[1] = brightness;
-                                    pixel[2] = brightness;
-                                    pixel[3] = 0xFF;
-                                }
-                                else {
-                                    pixel[0] = brightness;
-                                    pixel[1] = 0x0;
-                                    pixel[2] = 0x0;
-                                    pixel[3] = 0xFF;
-                                }
-                            }
+                        // TODO: refactor this a bit.
+                        if i == self.camera.highlighted_star {
+                            pixel[0] = 0x0;
+                            pixel[1] = 0xFF;
+                            pixel[2] = 0x0;
+                            pixel[3] = 0xFF;
                         }
-
-                        star_count += 1;
-                    },
-                    _ => {},
+                        else if star_count > HIGHLIGHT_RED_STAR_COUNT {
+                            pixel[0] = brightness;
+                            pixel[1] = brightness;
+                            pixel[2] = brightness;
+                            pixel[3] = 0xFF;
+                        }
+                        else {
+                            pixel[0] = brightness;
+                            pixel[1] = 0x0;
+                            pixel[2] = 0x0;
+                            pixel[3] = 0xFF;
+                        }
+                    }
                 }
-            });
+
+                star_count += 1;
+            }
 
             // Update texture.
             self.textured_quad.texture.update(ctx, &bytes);
+        }
+    }
+
+    fn update_camera(&mut self, input_state: &InputState) {
+        // Just defined here since this module doesn't know the window parameters right now and
+        // it's constant.
+        const WINDOW_WIDTH: f64 = 1024.0;
+
+        // Update camera zoom using scrollwheel.
+        self.camera.zoom_level = f64::max(0.0,
+            self.camera.zoom_level + input_state.mouse_wheel_dy as f64 * CAMERA_ZOOM_SPEED);
+
+        let cur_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
+        if input_state.left_mouse_button_down {
+            // Translate pixel movement to movement at the current scale.
+            // TODO: only works for a square viewport currently.
+            let movement_scale = self.camera.viewport_dimensions.x / WINDOW_WIDTH
+                / cur_scale;
+
+            // Calculate movement.
+            let (mouse_dx, mouse_dy) = input_state.mouse_diff;
+            let movement = Vec2d::new(-mouse_dx as f64, mouse_dy as f64) * movement_scale;
+            self.camera.position = self.camera.position + movement;
+        }
+
+        // Update highlighted star.
+        if self.camera.locked_star.is_none() {
+            let mouse_pos_window = Vec2d::new(input_state.mouse_pos.0 as f64, input_state.mouse_pos.1 as f64);
+            let mouse_pos_world = self.window_to_world(mouse_pos_window);
+            self.camera.highlighted_star = self.find_nearest_star(mouse_pos_world, HilbertIndex(0, 0));
+        }
+
+        // Update camera position to locked star position.
+        if input_state.right_mouse_button_down && !self.camera.right_mouse_down_prev {
+            if self.camera.locked_star.is_some() {
+                self.camera.locked_star = None;
+            }
+            else {
+                self.camera.locked_star = Some(self.camera.highlighted_star);
+            }
+        }
+        self.camera.right_mouse_down_prev = input_state.right_mouse_button_down;
+
+        if let Some(locked_star) = self.camera.locked_star {
+            self.camera.position = self.quadtree.items[locked_star].position;
+        }
+    }
+
+    fn linear_scale_to_exponential(linear: f64) -> f64 {
+        f64::exp(linear)
+    }
+
+    // Project window to world coordinates.
+    fn window_to_world(&self, window: Vec2d) -> Vec2d {
+        // Just defined here since this module doesn't know the window parameters right now and
+        // it's constant.
+        const WINDOW_WIDTH: f64 = 1024.0;
+        const WINDOW_HEIGHT: f64 = 1024.0;
+
+        let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
+        let view_size = self.camera.viewport_dimensions / zoom_scale;
+        let view_offset = self.camera.position - view_size * 0.5;
+
+        let pos_vp = Vec2d::new(window.x / WINDOW_WIDTH, 1.0 - window.y / WINDOW_HEIGHT);
+        Vec2d::new(pos_vp.x * view_size.x, pos_vp.y * view_size.y) + view_offset
+    }
+
+    fn find_nearest_star(&self, point: Vec2d, index: HilbertIndex) -> usize {
+        match self.quadtree.get(index) {
+            Some(&QuadtreeNode::Internal(_)) => {
+                let (x, y) = index.to_xy();
+                let depth = index.depth();
+
+                // Traverse into children until we find a leaf node.
+                let (node_min, node_max) = index.bounds(self.quadtree.min, self.quadtree.max);
+                let node_center = node_min * 0.5 + node_max * 0.5;
+
+                let quadrant_x = if point.x < node_center.x { 0 } else { 1 };
+                let quadrant_y = if point.y < node_center.y { 0 } else { 1 };
+
+                let child_index = HilbertIndex::from_xy_depth((x*2 + quadrant_x, y*2 + quadrant_y), depth + 1);
+                
+                self.find_nearest_star(point, child_index)
+            },
+            Some(&QuadtreeNode::Leaf(star_index)) => star_index,
+            _ => 0,
         }
     }
 }
 
 impl Drawable for Galaxy {
     /// Update the galaxy.
-    fn update(&mut self, _ctx: &mut Context, ui: &mut imgui::Ui, time_delta: f64) {
+    fn update(&mut self, _ctx: &mut Context, ui: &mut imgui::Ui, input_state: &InputState, time_delta: f64) {
+        // Update camera.
+        self.update_camera(input_state);
+
         // Imgui windows.
         ui.window("Galaxy")
             .size([350.0, 300.0], imgui::Condition::FirstUseEver)
             .build(|| {
-                ui.slider("Time scale", 0.0, 50_000.0, &mut self.time_scale);
+                ui.collapsing_header("Simulation", TreeNodeFlags::all())
+                    .then(|| {
+                        ui.slider("Time scale", 0.0, 50_000.0, &mut self.time_scale);
+                    });
+
+                ui.collapsing_header("Camera", TreeNodeFlags::all())
+                    .then(|| {
+                        ui.label_text("Cam pos", format!("{:.2}, {:.2}",
+                                                         self.camera.position.x,
+                                                         self.camera.position.y));
+                        ui.label_text("Zoom level", self.camera.zoom_level.to_string());
+                    });
+
+                ui.collapsing_header("Highlighted star", TreeNodeFlags::all())
+                    .then(|| {
+                        let star = &self.quadtree.items[self.camera.highlighted_star];
+                        ui.label_text("Pos", format!("{:.2}, {:.2}", star.position.x, star.position.y));
+                        ui.label_text("Velocity", format!("{:.2}, {:.2}", star.velocity.x, star.velocity.y));
+                        ui.label_text("Mass", star.mass.to_string());
+                    });
             });
 
         // Lets just make a new quadtree every time...
@@ -382,7 +524,7 @@ impl Drawable for Galaxy {
         self.integrate(time_delta);
         let integrate_time = integrate_start.elapsed().as_millis();
 
-        log::info!("Update timings: quadtree {quadtree_build_time}ms, mass distribution {mass_distribution_time}ms, integrate {integrate_time}ms");
+        log::debug!("Update timings: quadtree {quadtree_build_time}ms, mass distribution {mass_distribution_time}ms, integrate {integrate_time}ms");
 
         self.texture_dirty = true;
     }

@@ -6,6 +6,7 @@ mod drawable;
 mod quadtree;
 mod hilbert;
 mod combined_stage;
+mod input;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,6 +21,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use crate::hilbert::HilbertIndex;
 use crate::combined_stage::CombinedStage;
 use crate::drawable::Drawable;
+use crate::input::InputState;
 
 /// The window width.
 const WINDOW_WIDTH: i32 = 1024;
@@ -42,6 +44,7 @@ pub struct Stage {
     start_time: Instant,
     sim_time: f64,
     imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>,
+    input_state: InputState,
 }
 
 impl Stage {
@@ -62,6 +65,7 @@ impl Stage {
             start_time,
             sim_time: start_time.elapsed().as_secs_f64(),
             imgui,
+            input_state: Default::default(),
         })
     }
 
@@ -92,8 +96,12 @@ impl<'a> EventHandler for Stage {
             self.sim_time += FIXED_TIMESTEP;
 
             // Update drawables.
-            self.perlin_map.update(ctx, imgui.as_mut(), FIXED_TIMESTEP);
-            self.galaxy.update(ctx, imgui.as_mut(), FIXED_TIMESTEP);
+            self.perlin_map.update(ctx, imgui.as_mut(), &self.input_state, FIXED_TIMESTEP);
+            self.galaxy.update(ctx, imgui.as_mut(), &self.input_state, FIXED_TIMESTEP);
+
+            // Clear relative moevments from input state.
+            self.input_state.mouse_diff = (0.0, 0.0);
+            self.input_state.mouse_wheel_dy = 0.0;
         }
     }
 
@@ -127,6 +135,36 @@ impl<'a> EventHandler for Stage {
         else if keycode == KeyCode::A {
             self.galaxy.time_scale /= 10.0;
         }
+    }
+
+    fn mouse_wheel_event(&mut self, _ctx: &mut Context, _x: f32, y: f32) {
+        self.input_state.mouse_wheel_dy += y;
+    }
+
+    fn mouse_motion_event(&mut self, _ctx: &mut Context, x: f32, y: f32) {
+        let (old_x, old_y) = self.input_state.mouse_pos;
+        let (cur_dx, cur_dy) = self.input_state.mouse_diff;
+
+        self.input_state.mouse_pos = (x, y);
+        self.input_state.mouse_diff = (cur_dx + (x - old_x), cur_dy + (y - old_y));
+    }
+
+    fn mouse_button_up_event(&mut self, _ctx: &mut Context, button: MouseButton, _x: f32, _y: f32) {
+        let button_state = match button {
+            MouseButton::Left => &mut self.input_state.left_mouse_button_down,
+            MouseButton::Right => &mut self.input_state.right_mouse_button_down,
+            _ => &mut self.input_state.middle_mouse_button_down,
+        };
+        *button_state = false;
+    }
+
+    fn mouse_button_down_event(&mut self, _ctx: &mut Context, button: MouseButton, _x: f32, _y: f32) {
+        let button_state = match button {
+            MouseButton::Left => &mut self.input_state.left_mouse_button_down,
+            MouseButton::Right => &mut self.input_state.right_mouse_button_down,
+            _ => &mut self.input_state.middle_mouse_button_down,
+        };
+        *button_state = true;
     }
 }
 

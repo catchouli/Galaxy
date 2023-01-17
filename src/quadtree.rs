@@ -76,11 +76,11 @@ impl core::fmt::Debug for QuadtreeNode {
 pub struct Quadtree<T: Spatial, Internal = ()> {
     /// The min of the bounds of the quadtree's root node, both values must be less than the ones
     /// in Quadtree::max.
-    min: Vec2d,
+    pub min: Vec2d,
 
     /// The max of the bounds of the quadtree's root node, both values must be greater than the
     /// ones in Quadtree::min.
-    max: Vec2d,
+    pub max: Vec2d,
 
     /// Items stored in the quadtree as a flat list, along with the node index they're in.
     pub items: Vec<T>,
