@@ -13,6 +13,7 @@ use std::{error::Error, iter::repeat, time::Instant};
 
 use galaxy::Galaxy;
 use miniquad::*;
+use owning_ref::OwningRefMut;
 use perlin_map::PerlinMap;
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -40,11 +41,11 @@ pub struct Stage {
     seed: u64,
     start_time: Instant,
     sim_time: f64,
-    imgui: Rc<RefCell<imgui::Context>>,
+    imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>,
 }
 
 impl Stage {
-    pub fn new(ctx: &mut Context, imgui: Rc<RefCell<imgui::Context>>) -> Result<Stage, Box<dyn Error>> {
+    pub fn new(ctx: &mut Context, imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>) -> Result<Stage, Box<dyn Error>> {
         let start_time = Instant::now();
 
         // Create perlin map.
@@ -82,13 +83,12 @@ impl Stage {
 
 impl<'a> EventHandler for Stage {
     fn update(&mut self, ctx: &mut Context) {
-        //let mut imgui = self.imgui.borrow_mut();
-        //let ui = imgui.frame();
-        //ui.window("update")
-        //    .size([300.0, 300.0], imgui::Condition::FirstUseEver)
-        //    .build(|| {
-        //        ui.text("Hello world");
-        //    });
+        let imgui = self.imgui.borrow_mut();
+        imgui.window("update")
+            .size([300.0, 300.0], imgui::Condition::FirstUseEver)
+            .build(|| {
+                imgui.text("Hello world");
+            });
 
         // Update timer.
         let time_since_start = self.start_time.elapsed().as_secs_f64();
@@ -121,14 +121,14 @@ impl<'a> EventHandler for Stage {
         }
         else if keycode == KeyCode::Space {
             log::info!("Key pressed, regenerating galaxy");
-            //self.seed += 1;
-            //self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
+            self.seed += 1;
+            self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
         }
         else if keycode == KeyCode::M {
-            //self.galaxy.time_scale *= 10.0;
+            self.galaxy.time_scale *= 10.0;
         }
         else if keycode == KeyCode::A {
-            //self.galaxy.time_scale /= 10.0;
+            self.galaxy.time_scale /= 10.0;
         }
     }
 }
@@ -146,14 +146,12 @@ fn main() {
         ..Default::default()
     };
 
-    // Create a shared imgui instance, allowing multiple stages to access it, and finally allowing
-    // the imgui renderer to draw and update it.
-    let imgui = Rc::new(RefCell::new(imgui::Context::create()));
-
     miniquad::start(config, |mut ctx: &mut GraphicsContext| {
+        let mut imgui_renderer = drawable::ImguiRenderer::new(&mut ctx);
+
         Box::new(CombinedStage::new(vec![
-            Box::new(Stage::new(&mut ctx, imgui.clone()).unwrap()),
-            Box::new(drawable::ImguiRenderer::new(&mut ctx, imgui)),
+            Box::new(Stage::new(&mut ctx, imgui_renderer.ui()).unwrap()),
+            Box::new(imgui_renderer),
         ]))
     });
 }

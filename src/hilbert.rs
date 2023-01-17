@@ -19,7 +19,7 @@ pub const MAX_DEPTH: u8 = 16;
 /// number of nodes in the current level.
 /// A 32-bit index lets us store 16 full levels of quadtree, or 1_431_655_765 nodes this way
 /// (4^0 + 4^1 + ... + 4^15).
-pub const DEPTH_OFFSETS: [usize; 16] = [0, 1, 5, 21, 85, 341, 1365, 5461, 21845, 87381, 349525, 1398101,
+pub const _DEPTH_OFFSETS: [usize; 16] = [0, 1, 5, 21, 85, 341, 1365, 5461, 21845, 87381, 349525, 1398101,
                                         5592405, 22369621, 89478485, 357913941];
 
 impl HilbertIndex {
@@ -95,13 +95,13 @@ impl HilbertIndex {
     }
 
     /// Calculate the linear array index of this hilbert index at this quadtree depth.
-    pub fn array_index(&self) -> usize {
+    pub fn _array_index(&self) -> usize {
         let depth = self.depth();
         if depth >= MAX_DEPTH {
             panic!("Hilbert Index depth of {} is greater than maximum depth of {}", depth, MAX_DEPTH);
         }
 
-        DEPTH_OFFSETS[depth as usize] + self.index() as usize
+        _DEPTH_OFFSETS[depth as usize] + self.index() as usize
     }
 
     /// Get the children of this hilbert index, i.e. the four nodes in the same location as this
@@ -119,7 +119,7 @@ impl HilbertIndex {
     }
 
     /// Get the bounds referred to by this hilbert index, assuming a given root node's bounds.
-    pub fn bounds(&self, root_min: Vec2d, root_max: Vec2d) -> (Vec2d, Vec2d) {
+    pub fn _bounds(&self, root_min: Vec2d, root_max: Vec2d) -> (Vec2d, Vec2d) {
         // Get the x, y coordinates of this node.
         let (x, y) = self.to_xy();
 

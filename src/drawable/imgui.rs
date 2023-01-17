@@ -1,8 +1,8 @@
-use std::{cell::{RefCell, RefMut}, rc::Rc};
-
 // Based on https://github.com/not-fl3/imgui-miniquad-render.
 use miniquad::*;
 use imgui::{DrawCmd, DrawCmdParams, DrawVert};
+use std::{rc::Rc, cell::RefCell};
+use owning_ref::OwningRefMut;
 use crate::shaders::imgui as shader;
 
 const MAX_VERTICES: usize = 30000;
@@ -10,8 +10,10 @@ const MAX_INDICES: usize = 50000;
 
 /// An ImguiRenderer, which owns an instance of imgui and responds to miniquad events for input and rendering.
 pub struct ImguiRenderer {
+    // This really annoying type is just so we can store the Ui instance we get from
+    // Context::new_frame() and share it.
+    imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>,
     last_frame: std::time::Instant,
-    imgui: Rc<RefCell<imgui::Context>>,
     pipeline: Pipeline,
     font_texture: Texture,
     draw_calls: Vec<Bindings>,
@@ -19,7 +21,7 @@ pub struct ImguiRenderer {
 
 impl ImguiRenderer {
     /// Create a new imgui renderer for the given miniquad context.
-    pub fn new(ctx: &mut miniquad::Context, imgui: Rc<RefCell<imgui::Context>>) -> Self {
+    pub fn new(ctx: &mut miniquad::Context) -> Self {
         let shader = Shader::new(ctx, shader::VERTEX, shader::FRAGMENT, shader::meta()).unwrap();
 
         let pipeline = Pipeline::with_params(
@@ -41,10 +43,10 @@ impl ImguiRenderer {
             },
         );
 
+        let mut imgui = imgui::Context::create();
         {
             use imgui::*;
 
-            let mut imgui = imgui.borrow_mut();
             imgui.fonts().add_font(&[FontSource::DefaultFontData {
                 config: Some(FontConfig {
                     rasterizer_multiply: 1.75,
@@ -84,8 +86,7 @@ impl ImguiRenderer {
         }
 
         let font_texture = {
-            let mut imgui = imgui.borrow_mut();
-            let mut fonts = imgui.fonts();
+            let fonts = imgui.fonts();
             let texture = fonts.build_rgba32_texture();
 
             Texture::from_rgba8(
@@ -96,6 +97,10 @@ impl ImguiRenderer {
             )
         };
 
+        // Wrap the imgui instance and a Ui instance up in an OwningRef so we can store and share it.
+        let imgui = Rc::new(RefCell::new(OwningRefMut::new(Box::new(imgui)).map_mut(|imgui| imgui.new_frame())));
+
+
         Self {
             imgui,
             pipeline,
@@ -104,18 +109,23 @@ impl ImguiRenderer {
             draw_calls: Vec::with_capacity(200),
         }
     }
+
+    /// Get the shared reference to the imgui context/ui for making windows etc.
+    pub fn ui(&mut self) -> Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>> {
+        self.imgui.clone()
+    }
 }
 
 impl EventHandler for ImguiRenderer {
     fn resize_event(&mut self, _ctx: &mut miniquad::Context, width: f32, height: f32) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
         io.display_size = [width, height];
     }
 
     fn char_event(&mut self, _ctx: &mut miniquad::Context, character: char, mods: KeyMods, _: bool) {
         let mut imgui = self.imgui.borrow_mut();
-        let io = imgui.io_mut();
+        let io = imgui.as_owner_mut().io_mut();
 
         io.key_ctrl = mods.ctrl;
         io.key_alt = mods.alt;
@@ -126,7 +136,7 @@ impl EventHandler for ImguiRenderer {
 
     fn key_down_event(&mut self, _ctx: &mut miniquad::Context, keycode: KeyCode, mods: KeyMods, _: bool) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
 
         // when the keycode is the modifier itself - mods.MODIFIER is false yet, however the modifier button is just pressed and is actually true
         io.key_ctrl = mods.ctrl;
@@ -138,7 +148,7 @@ impl EventHandler for ImguiRenderer {
 
     fn key_up_event(&mut self, _ctx: &mut miniquad::Context, keycode: KeyCode, mods: KeyMods) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
 
         // when the keycode is the modifier itself - mods.MODIFIER is true, however the modifier is actually released
         io.key_ctrl =
@@ -152,12 +162,12 @@ impl EventHandler for ImguiRenderer {
 
     fn mouse_motion_event(&mut self, _ctx: &mut miniquad::Context, x: f32, y: f32) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
         io.mouse_pos = [x, y];
     }
     fn mouse_wheel_event(&mut self, _ctx: &mut miniquad::Context, _x: f32, y: f32) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
         io.mouse_wheel = y;
     }
     fn mouse_button_down_event(
@@ -168,7 +178,7 @@ impl EventHandler for ImguiRenderer {
         _y: f32,
     ) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
         let mouse_left = button == MouseButton::Left;
         let mouse_right = button == MouseButton::Right;
         io.mouse_down = [mouse_left, mouse_right, false, false, false];
@@ -181,7 +191,7 @@ impl EventHandler for ImguiRenderer {
         _y: f32,
     ) {
         let mut imgui = self.imgui.borrow_mut();
-        let mut io = imgui.io_mut();
+        let mut io = imgui.as_owner_mut().io_mut();
         io.mouse_down = [false, false, false, false, false];
     }
 
@@ -192,17 +202,11 @@ impl EventHandler for ImguiRenderer {
     fn draw(&mut self, ctx: &mut miniquad::Context) {
         let mut imgui = self.imgui.borrow_mut();
         let draw_data = {
-            let io = imgui.io_mut();
+            let io = imgui.as_owner_mut().io_mut();
             let now = std::time::Instant::now();
             io.update_delta_time(now.duration_since(self.last_frame));
             self.last_frame = now;
-            let ui = imgui.frame();
-            ui.window("test")
-                .size([300.0, 300.0], imgui::Condition::FirstUseEver)
-                .build(|| {
-                    ui.text("Hello world");
-                });
-            imgui.render()
+            imgui.as_owner_mut().render()
         };
 
         let (width, height) = ctx.screen_size();
@@ -222,12 +226,12 @@ impl EventHandler for ImguiRenderer {
                     ctx,
                     BufferType::VertexBuffer,
                     MAX_VERTICES * std::mem::size_of::<DrawVert>(),
-                );
+                    );
                 let index_buffer = Buffer::stream(
                     ctx,
                     BufferType::IndexBuffer,
                     MAX_INDICES * std::mem::size_of::<u16>(),
-                );
+                    );
                 let bindings = Bindings {
                     vertex_buffers: vec![vertex_buffer],
                     index_buffer,
@@ -245,7 +249,7 @@ impl EventHandler for ImguiRenderer {
                     ctx,
                     BufferType::VertexBuffer,
                     vertices.len() * std::mem::size_of::<DrawVert>(),
-                );
+                    );
             }
 
             if indices.len() * std::mem::size_of::<u16>() > dc.index_buffer.size() {
@@ -255,7 +259,7 @@ impl EventHandler for ImguiRenderer {
                     ctx,
                     BufferType::IndexBuffer,
                     indices.len() * std::mem::size_of::<u16>() * std::mem::size_of::<u16>(),
-                );
+                    );
             }
 
             dc.vertex_buffers[0].update(ctx, vertices);
@@ -275,20 +279,20 @@ impl EventHandler for ImguiRenderer {
                             (clip_rect[2] - clip_off[0]) * clip_scale[0],
                             (clip_rect[3] - clip_off[1]) * clip_scale[1],
                         ];
-                        ctx.apply_pipeline(&self.pipeline);
-                        let h = clip_rect[3] - clip_rect[1];
+                            ctx.apply_pipeline(&self.pipeline);
+                            let h = clip_rect[3] - clip_rect[1];
 
-                        ctx.apply_scissor_rect(
-                            clip_rect[0] as i32,
-                            height as i32 - (clip_rect[1] + h) as i32,
-                            (clip_rect[2] - clip_rect[0]) as i32,
-                            h as i32,
-                        );
+                            ctx.apply_scissor_rect(
+                                clip_rect[0] as i32,
+                                height as i32 - (clip_rect[1] + h) as i32,
+                                (clip_rect[2] - clip_rect[0]) as i32,
+                                h as i32,
+                                );
 
-                        ctx.apply_bindings(&dc);
-                        ctx.apply_uniforms(&shader::Uniforms { projection });
-                        ctx.draw(slice_start, count as i32, 1);
-                        slice_start += count as i32;
+                            ctx.apply_bindings(&dc);
+                            ctx.apply_uniforms(&shader::Uniforms { projection });
+                            ctx.draw(slice_start, count as i32, 1);
+                            slice_start += count as i32;
                     }
                     _ => {}
                 }
@@ -298,5 +302,8 @@ impl EventHandler for ImguiRenderer {
         ctx.end_render_pass();
 
         ctx.commit_frame();
+
+        // After rendering, start a new frame for next frame.
+        imgui.as_owner_mut().new_frame();
     }
 }
