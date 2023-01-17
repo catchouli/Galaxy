@@ -83,12 +83,7 @@ impl Stage {
 
 impl<'a> EventHandler for Stage {
     fn update(&mut self, ctx: &mut Context) {
-        let imgui = self.imgui.borrow_mut();
-        imgui.window("update")
-            .size([300.0, 300.0], imgui::Condition::FirstUseEver)
-            .build(|| {
-                imgui.text("Hello world");
-            });
+        let mut imgui = self.imgui.borrow_mut();
 
         // Update timer.
         let time_since_start = self.start_time.elapsed().as_secs_f64();
@@ -97,19 +92,21 @@ impl<'a> EventHandler for Stage {
             self.sim_time += FIXED_TIMESTEP;
 
             // Update drawables.
-            self.perlin_map.update(ctx, FIXED_TIMESTEP);
-            self.galaxy.update(ctx, FIXED_TIMESTEP);
+            self.perlin_map.update(ctx, imgui.as_mut(), FIXED_TIMESTEP);
+            self.galaxy.update(ctx, imgui.as_mut(), FIXED_TIMESTEP);
         }
     }
 
     fn draw(&mut self, ctx: &mut Context) {
         ctx.begin_default_pass(Default::default());
 
+        let mut imgui = self.imgui.borrow_mut();
+
         // Draw drawables.
         if DRAW_PERLIN_MAP {
-            self.perlin_map.draw(ctx);
+            self.perlin_map.draw(ctx, imgui.as_mut());
         }
-        self.galaxy.draw(ctx);
+        self.galaxy.draw(ctx, imgui.as_mut());
 
         ctx.end_render_pass();
         ctx.commit_frame();

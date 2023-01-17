@@ -41,10 +41,10 @@ impl PerlinMap {
 
 impl Drawable for PerlinMap {
     /// Update the perlin map.
-    fn update(&mut self, _ctx: &mut Context, _time_delta: f64) {}
+    fn update(&mut self, _ctx: &mut Context, _ui: &mut imgui::Ui, _time_delta: f64) {}
 
     /// Draw the perlin map.
-    fn draw(&mut self, ctx: &mut Context) {
+    fn draw(&mut self, ctx: &mut Context, _ui: &mut imgui::Ui) {
         self.textured_quad.draw(ctx);
     }
 }

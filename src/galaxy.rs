@@ -20,7 +20,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 10000;
+const STAR_COUNT: usize = 100;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -49,6 +49,9 @@ const MIN_GRAVITY_DISTANCE_SQUARED: f64 = 0.0;
 
 /// Whether to draw the debug overlay for the quadtree.
 const DEBUG_DRAW_QUADTREE: bool = false;
+
+/// How many stars to highlight in red for debugging purposes.
+const HIGHLIGHT_RED_STAR_COUNT: usize = 0;
 
 /// A single star in our galaxy.
 pub struct Star {
@@ -320,7 +323,7 @@ impl Galaxy {
                                 let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
                                                           255.0) as u8;
 
-                                if star_count > 100 {
+                                if star_count > HIGHLIGHT_RED_STAR_COUNT {
                                     pixel[0] = brightness;
                                     pixel[1] = brightness;
                                     pixel[2] = brightness;
@@ -349,7 +352,14 @@ impl Galaxy {
 
 impl Drawable for Galaxy {
     /// Update the galaxy.
-    fn update(&mut self, _ctx: &mut Context, time_delta: f64) {
+    fn update(&mut self, _ctx: &mut Context, ui: &mut imgui::Ui, time_delta: f64) {
+        // Imgui windows.
+        ui.window("Galaxy")
+            .size([350.0, 300.0], imgui::Condition::FirstUseEver)
+            .build(|| {
+                ui.slider("Time scale", 0.0, 50_000.0, &mut self.time_scale);
+            });
+
         // Lets just make a new quadtree every time...
         let quadtree_build_start = Instant::now();
         let stars = std::mem::replace(&mut self.quadtree.items, Vec::new());
@@ -378,7 +388,7 @@ impl Drawable for Galaxy {
     }
 
     /// Draw the galaxy.
-    fn draw(&mut self, ctx: &mut Context) {
+    fn draw(&mut self, ctx: &mut Context, _ui: &mut imgui::Ui) {
         self.update_texture(ctx);
         self.textured_quad.draw(ctx);
         if DEBUG_DRAW_QUADTREE {

@@ -9,8 +9,8 @@ pub use wireframe_quad::*;
 pub use self::imgui::*;
 
 pub trait Drawable {
-    fn update(&mut self, ctx: &mut Context, time_delta: f64);
-    fn draw(&mut self, ctx: &mut Context);
+    fn update(&mut self, ctx: &mut Context, ui: &mut ::imgui::Ui, time_delta: f64);
+    fn draw(&mut self, ctx: &mut Context, ui: &mut ::imgui::Ui);
 }
 
 pub trait DebugDrawable {
