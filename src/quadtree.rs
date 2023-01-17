@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::{error::Error, collections::VecDeque};
 
-use crate::{types::Vec2d, drawable::DebugDrawable, primitives::WireframeQuad};
+use crate::types::Vec2d;
+use crate::drawable::*;
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
 

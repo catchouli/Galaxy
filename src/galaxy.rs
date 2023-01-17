@@ -5,9 +5,8 @@ use std::time::Instant;
 use miniquad::*;
 use rand::Rng;
 use crate::hilbert::HilbertIndex;
-use crate::primitives::TexturedQuad;
+use crate::drawable::*;
 use crate::types::Vec2d;
-use crate::drawable::{Drawable, DebugDrawable};
 use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
 /// The texture width.
@@ -21,7 +20,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 50000;
+const STAR_COUNT: usize = 10000;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -90,8 +89,8 @@ impl Galaxy {
         let textured_quad = TexturedQuad::new(ctx, TEX_WIDTH, TEX_HEIGHT)?;
 
         // Create quadtree.
-        let mut quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS, -GALAXY_RADIUS),
-                                         Vec2d::new(GALAXY_RADIUS, GALAXY_RADIUS))?;
+        let mut quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS*2.0, -GALAXY_RADIUS*2.0),
+                                         Vec2d::new(GALAXY_RADIUS*2.0, GALAXY_RADIUS*2.0))?;
 
         // Add supermassive black hole at center of galaxy.
         quadtree.add(Star {
@@ -106,20 +105,23 @@ impl Galaxy {
             let mass = rng.gen_range(STAR_MASS_MIN..STAR_MASS_MAX);
 
             // Generate position with angle/distance from center.
-            let angle = rng.gen_range(0.0..(PI*2.0));
-            // Quantize angle for arms.
-            let distance_from_center = rng.gen_range(0.0..GALAXY_RADIUS);
-            let position = Vec2d::new(f64::sin(angle) * distance_from_center,
-                                      f64::cos(angle) * distance_from_center);
+            //let angle = rng.gen_range(0.0..(PI*2.0));
+            //let distance_from_center = rng.gen_range(0.0..GALAXY_RADIUS);
+            //let position = Vec2d::new(f64::sin(angle) * distance_from_center,
+            //                          f64::cos(angle) * distance_from_center);
+
+            // Generate position in a rectangle.
+            let position_bounds = (-GALAXY_RADIUS)..GALAXY_RADIUS;
+            let position = Vec2d::new(rng.gen_range(position_bounds.clone()),
+                                      rng.gen_range(position_bounds));
+            let distance_from_center = f64::sqrt(position.x * position.x + position.y * position.y);
 
             // Calculate speed for orbit at this radius.
             // https://www.nagwa.com/en/explainers/142168516704/
             let speed = f64::sqrt(GRAVITATIONAL_CONSTANT * SUPERMASSIVE_BLACK_HOLE_MASS / distance_from_center);
-
-            // Generate position in a rectangle.
-            //let position_bounds = (-GALAXY_RADIUS)..GALAXY_RADIUS;
-            //let position = Vec2d::new(rng.gen_range(position_bounds.clone()),
-            //                          rng.gen_range(position_bounds));
+            //let speed = f64::sqrt(GRAVITATIONAL_CONSTANT * 10000.0 / distance_from_center);
+            //let speed = 0.0;
+            //let speed = rng.gen_range(0.0..0.1);
 
             // Figure out direction perpendicular to center.
             let angle = f64::atan2(position.x, position.y) + PI / 2.0;
@@ -318,7 +320,7 @@ impl Galaxy {
                                 let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
                                                           255.0) as u8;
 
-                                if star_count > 0 {
+                                if star_count > 100 {
                                     pixel[0] = brightness;
                                     pixel[1] = brightness;
                                     pixel[2] = brightness;
@@ -352,8 +354,8 @@ impl Drawable for Galaxy {
         let quadtree_build_start = Instant::now();
         let stars = std::mem::replace(&mut self.quadtree.items, Vec::new());
 
-        self.quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS, -GALAXY_RADIUS),
-                                      Vec2d::new(GALAXY_RADIUS, GALAXY_RADIUS)).unwrap();
+        self.quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS*2.0, -GALAXY_RADIUS*2.0),
+                                      Vec2d::new(GALAXY_RADIUS*2.0, GALAXY_RADIUS*2.0)).unwrap();
 
         for star in stars {
             self.quadtree.add(star);

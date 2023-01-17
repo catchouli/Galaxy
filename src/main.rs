@@ -1,21 +1,24 @@
 mod shaders;
-mod primitives;
 mod types;
 mod galaxy;
 mod perlin_map;
 mod drawable;
 mod quadtree;
 mod hilbert;
+mod combined_stage;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::{error::Error, iter::repeat, time::Instant};
 
 use galaxy::Galaxy;
 use miniquad::*;
 use perlin_map::PerlinMap;
-use drawable::Drawable;
 use rand::{rngs::StdRng, SeedableRng};
 
 use crate::hilbert::HilbertIndex;
+use crate::combined_stage::CombinedStage;
+use crate::drawable::Drawable;
 
 /// The window width.
 const WINDOW_WIDTH: i32 = 1024;
@@ -37,10 +40,11 @@ pub struct Stage {
     seed: u64,
     start_time: Instant,
     sim_time: f64,
+    imgui: Rc<RefCell<imgui::Context>>,
 }
 
 impl Stage {
-    pub fn new(ctx: &mut Context) -> Result<Stage, Box<dyn Error>> {
+    pub fn new(ctx: &mut Context, imgui: Rc<RefCell<imgui::Context>>) -> Result<Stage, Box<dyn Error>> {
         let start_time = Instant::now();
 
         // Create perlin map.
@@ -56,6 +60,7 @@ impl Stage {
             seed,
             start_time,
             sim_time: start_time.elapsed().as_secs_f64(),
+            imgui,
         })
     }
 
@@ -75,8 +80,16 @@ impl Stage {
     }
 }
 
-impl EventHandler for Stage {
+impl<'a> EventHandler for Stage {
     fn update(&mut self, ctx: &mut Context) {
+        //let mut imgui = self.imgui.borrow_mut();
+        //let ui = imgui.frame();
+        //ui.window("update")
+        //    .size([300.0, 300.0], imgui::Condition::FirstUseEver)
+        //    .build(|| {
+        //        ui.text("Hello world");
+        //    });
+
         // Update timer.
         let time_since_start = self.start_time.elapsed().as_secs_f64();
 
@@ -108,14 +121,14 @@ impl EventHandler for Stage {
         }
         else if keycode == KeyCode::Space {
             log::info!("Key pressed, regenerating galaxy");
-            self.seed += 1;
-            self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
+            //self.seed += 1;
+            //self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
         }
         else if keycode == KeyCode::M {
-            self.galaxy.time_scale *= 10.0;
+            //self.galaxy.time_scale *= 10.0;
         }
         else if keycode == KeyCode::A {
-            self.galaxy.time_scale /= 10.0;
+            //self.galaxy.time_scale /= 10.0;
         }
     }
 }
@@ -133,7 +146,14 @@ fn main() {
         ..Default::default()
     };
 
-    miniquad::start(config, |mut ctx| {
-        Box::new(Stage::new(&mut ctx).unwrap())
+    // Create a shared imgui instance, allowing multiple stages to access it, and finally allowing
+    // the imgui renderer to draw and update it.
+    let imgui = Rc::new(RefCell::new(imgui::Context::create()));
+
+    miniquad::start(config, |mut ctx: &mut GraphicsContext| {
+        Box::new(CombinedStage::new(vec![
+            Box::new(Stage::new(&mut ctx, imgui.clone()).unwrap()),
+            Box::new(drawable::ImguiRenderer::new(&mut ctx, imgui)),
+        ]))
     });
 }
