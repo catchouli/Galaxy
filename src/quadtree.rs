@@ -137,18 +137,6 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
         //}
     }
 
-    pub fn get_mut(&mut self, index: HilbertIndex) -> Option<&mut QuadtreeNode> {
-        self.nodes.get_mut(&index)
-        //let index = index.array_index();
-        //let block = index / BLOCK_SIZE;
-        //let index_in_block = index - (block * BLOCK_SIZE);
-
-        //match self.blocks.get_mut(block) {
-        //    Some(Some(block)) => block.get_mut(index_in_block),
-        //    _ => None,
-        //}
-    }
-
     /// Safely insert a node at an index, resizing the internal vector if necessary.
     fn safe_insert(&mut self, index: HilbertIndex, node: QuadtreeNode) {
         self.nodes.insert(index, node);
@@ -248,88 +236,90 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
     /// Split the specified leaf node and insert the new item. In order to do this, we need to
     /// descend until the item in the existing leaf node and the new item are in different
     /// quadrants, if necessary.
-    fn split_and_insert(&mut self, mut insert_pos: HilbertIndex, item: NodeIndex) {
-        // Otherwise, we have to split the current leaf node until the two items are in separate
-        // leaf nodes.
-        log::trace!("Splitting leaf node at {insert_pos:?}");
+    fn split_and_insert(&mut self, leaf_pos: HilbertIndex, item: NodeIndex) {
+        log::trace!("Splitting leaf node at {leaf_pos:?}");
 
-        // TODO: we should probably centralise this in a function that also reuses deleted internal nodes.
-        let internal_index = self.internal.len();
-        self.internal.push(None);
-
-        // Replace leaf node in tree with internal node, and prepare to insert our two nodes
-        // further down the tree.
-        let a = std::mem::replace(self.get_mut(insert_pos).expect("Nonexistent leaf node"),
-            QuadtreeNode::Internal(internal_index));
-        let b = QuadtreeNode::Leaf(item);
-
-        // Get position of items.
-        let a_xy = *match a {
-            QuadtreeNode::Leaf(index) => self.items[index].xy(),
-            _ => panic!("Tried to split a non-leaf node")
+        // Get the existing item and the positions of both items.
+        let existing_item = match self.get(leaf_pos) {
+            Some(&QuadtreeNode::Leaf(index)) => index,
+            _ => panic!("Tried to split a non-leaf node"),
         };
+        let a_xy = *self.items[existing_item].xy();
         let b_xy = *self.items[item].xy();
 
-        // If the items match exactly, it's better just to discard some so that we don't end up
-        // recursing infinitely.
-        if a_xy == b_xy {
-            log::warn!("Tried to insert two identical items at position {:?}, discarding one.", a_xy);
-            return;
-        }
-
         // Calculate bounds of current node.
-        let original_node_size = (self.max - self.min) / (1 << insert_pos.depth()) as f64;
+        let original_node_size = (self.max - self.min) / (1 << leaf_pos.depth()) as f64;
 
-        let (mut x, mut y) = insert_pos.to_xy();
+        let (mut x, mut y) = leaf_pos.to_xy();
         let mut node_min = self.min + Vec2d::new(original_node_size.x * x as f64,
                                                  original_node_size.y * y as f64);
         let mut node_max = node_min + original_node_size;
 
-        loop {
+        // Descend until the two items are in different quadrants, working out where the new
+        // internal nodes and the two leaves go. Nothing is changed until we know it'll fit.
+        let mut insert_pos = leaf_pos;
+        let mut new_internal_positions = Vec::new();
+        let (index_a, index_b) = loop {
             let insert_depth = insert_pos.depth() + 1;
+
+            // Leaves only hold one item, so two items too close together to separate within the
+            // maximum depth (including identical positions) can't both be in the tree. Leave the
+            // new one out: it's still in the item list so it's still simulated, it just isn't
+            // in the tree until the two move apart.
+            if insert_depth >= hilbert::MAX_DEPTH {
+                log::debug!("Items at {a_xy:?} and {b_xy:?} are too close to split, leaving one out of the tree");
+                return;
+            }
+
             let node_center = node_max * 0.5 + node_min * 0.5;
             let quadrant_a = Self::quadrant(&node_center, &a_xy);
             let quadrant_b = Self::quadrant(&node_center, &b_xy);
 
-            // If the two nodes are in different quadrants, we can just insert them.
-            if quadrant_a.0 != quadrant_b.0 || quadrant_a.1 != quadrant_b.1 {
-                let insert_depth = insert_pos.depth() + 1;
-
+            // If the two items are in different quadrants, we can insert them here.
+            if quadrant_a != quadrant_b {
                 let index_a = HilbertIndex::from_xy_depth((x*2 + quadrant_a.0, y*2 + quadrant_a.1),
                     insert_depth);
-
                 let index_b = HilbertIndex::from_xy_depth((x*2 + quadrant_b.0, y*2 + quadrant_b.1),
                     insert_depth);
-
-                self.safe_insert(index_a, a);
-                self.safe_insert(index_b, b);
-                break;
+                break (index_a, index_b);
             }
-            // Otherwise, we have to insert a new internal node, and descend down the tree until we
-            // find an appropriate place for them.
+
+            // Otherwise we need another internal node, so descend into the shared quadrant,
+            // updating node position and bounds.
+            (x, y) = (x * 2 + quadrant_a.0, y * 2 + quadrant_a.1);
+            insert_pos = HilbertIndex::from_xy_depth((x, y), insert_depth);
+            new_internal_positions.push(insert_pos);
+
+            if quadrant_a.0 == 0 {
+                node_max.x = node_center.x;
+            }
             else {
-                // Descend into quadrant, updating node position and bounds.
-                (x, y) = (x * 2 + quadrant_a.0, y * 2 + quadrant_a.1);
-                insert_pos = HilbertIndex::from_xy_depth((x, y), insert_depth);
-
-                if quadrant_a.0 == 0 {
-                    node_max.x = node_center.x;
-                }
-                else {
-                    node_min.x = node_center.x;
-                }
-
-                if quadrant_a.1 == 0 {
-                    node_max.y = node_center.y;
-                }
-                else {
-                    node_min.y = node_center.y;
-                }
-
-                // Insert internal node here, and repeat.
-                self.safe_insert(insert_pos, QuadtreeNode::Internal(Default::default()));
+                node_min.x = node_center.x;
             }
+
+            if quadrant_a.1 == 0 {
+                node_max.y = node_center.y;
+            }
+            else {
+                node_min.y = node_center.y;
+            }
+        };
+
+        // Replace the leaf with an internal node, add the internal nodes below it, and then the
+        // two leaves. Each internal node needs its own slot in the internal value list.
+        for pos in std::iter::once(leaf_pos).chain(new_internal_positions) {
+            let internal_index = self.new_internal();
+            self.safe_insert(pos, QuadtreeNode::Internal(internal_index));
         }
+        self.safe_insert(index_a, QuadtreeNode::Leaf(existing_item));
+        self.safe_insert(index_b, QuadtreeNode::Leaf(item));
+    }
+
+    /// Allocate a slot for a new internal node's value and return its index.
+    /// TODO: reuse slots from deleted internal nodes.
+    fn new_internal(&mut self) -> NodeIndex {
+        self.internal.push(None);
+        self.internal.len() - 1
     }
 
     /// Get the quadrant of a point with regards to the specified cell center.

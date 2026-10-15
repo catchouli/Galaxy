@@ -5,21 +5,16 @@ mod perlin_map;
 mod drawable;
 mod quadtree;
 mod hilbert;
-mod combined_stage;
 mod input;
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::{error::Error, iter::repeat, time::Instant};
 
 use galaxy::Galaxy;
 use miniquad::*;
-use owning_ref::OwningRefMut;
 use perlin_map::PerlinMap;
 use rand::{rngs::StdRng, SeedableRng};
 
 use crate::hilbert::HilbertIndex;
-use crate::combined_stage::CombinedStage;
 use crate::drawable::Drawable;
 use crate::input::InputState;
 
@@ -43,12 +38,12 @@ pub struct Stage {
     seed: u64,
     start_time: Instant,
     sim_time: f64,
-    imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>,
+    egui_mq: egui_miniquad::EguiMq,
     input_state: InputState,
 }
 
 impl Stage {
-    pub fn new(ctx: &mut Context, imgui: Rc<RefCell<OwningRefMut<Box<imgui::Context>, imgui::Ui>>>) -> Result<Stage, Box<dyn Error>> {
+    pub fn new(ctx: &mut Context) -> Result<Stage, Box<dyn Error>> {
         let start_time = Instant::now();
 
         // Create perlin map.
@@ -64,7 +59,7 @@ impl Stage {
             seed,
             start_time,
             sim_time: start_time.elapsed().as_secs_f64(),
-            imgui,
+            egui_mq: egui_miniquad::EguiMq::new(ctx),
             input_state: Default::default(),
         })
     }
@@ -85,10 +80,8 @@ impl Stage {
     }
 }
 
-impl<'a> EventHandler for Stage {
+impl EventHandler for Stage {
     fn update(&mut self, ctx: &mut Context) {
-        let mut imgui = self.imgui.borrow_mut();
-
         // Update timer.
         let time_since_start = self.start_time.elapsed().as_secs_f64();
 
@@ -96,31 +89,54 @@ impl<'a> EventHandler for Stage {
             self.sim_time += FIXED_TIMESTEP;
 
             // Update drawables.
-            self.perlin_map.update(ctx, imgui.as_mut(), &self.input_state, FIXED_TIMESTEP);
-            self.galaxy.update(ctx, imgui.as_mut(), &self.input_state, FIXED_TIMESTEP);
+            self.perlin_map.update(ctx, &self.input_state, FIXED_TIMESTEP);
+            self.galaxy.update(ctx, &self.input_state, FIXED_TIMESTEP);
 
-            // Clear relative moevments from input state.
+            // Clear relative movements from input state.
             self.input_state.mouse_diff = (0.0, 0.0);
             self.input_state.mouse_wheel_dy = 0.0;
         }
     }
 
     fn draw(&mut self, ctx: &mut Context) {
-        ctx.begin_default_pass(Default::default());
+        // Build the UI for this frame.
+        let galaxy = &mut self.galaxy;
+        self.egui_mq.run(ctx, |_ctx, egui_ctx| {
+            galaxy.ui(egui_ctx);
+        });
 
-        let mut imgui = self.imgui.borrow_mut();
+        ctx.begin_default_pass(Default::default());
 
         // Draw drawables.
         if DRAW_PERLIN_MAP {
-            self.perlin_map.draw(ctx, imgui.as_mut());
+            self.perlin_map.draw(ctx);
         }
-        self.galaxy.draw(ctx, imgui.as_mut());
+        self.galaxy.draw(ctx);
 
         ctx.end_render_pass();
+
+        // Draw the UI on top.
+        self.egui_mq.draw(ctx);
+
         ctx.commit_frame();
     }
 
-    fn key_down_event(&mut self, ctx: &mut Context, keycode: KeyCode, _keymods: KeyMods, _repeat: bool) {
+    fn char_event(&mut self, _ctx: &mut Context, character: char, _keymods: KeyMods, _repeat: bool) {
+        self.egui_mq.char_event(character);
+    }
+
+    fn key_up_event(&mut self, _ctx: &mut Context, keycode: KeyCode, keymods: KeyMods) {
+        self.egui_mq.key_up_event(keycode, keymods);
+    }
+
+    fn key_down_event(&mut self, ctx: &mut Context, keycode: KeyCode, keymods: KeyMods, _repeat: bool) {
+        self.egui_mq.key_down_event(ctx, keycode, keymods);
+
+        // Leave keyboard input to egui while it's using it, e.g. for typing into a slider.
+        if self.egui_mq.egui_ctx().wants_keyboard_input() {
+            return;
+        }
+
         if keycode == KeyCode::Escape {
             ctx.quit();
         }
@@ -137,11 +153,17 @@ impl<'a> EventHandler for Stage {
         }
     }
 
-    fn mouse_wheel_event(&mut self, _ctx: &mut Context, _x: f32, y: f32) {
-        self.input_state.mouse_wheel_dy += y;
+    fn mouse_wheel_event(&mut self, _ctx: &mut Context, x: f32, y: f32) {
+        self.egui_mq.mouse_wheel_event(x, y);
+
+        if !self.egui_mq.egui_ctx().is_pointer_over_area() {
+            self.input_state.mouse_wheel_dy += y;
+        }
     }
 
     fn mouse_motion_event(&mut self, _ctx: &mut Context, x: f32, y: f32) {
+        self.egui_mq.mouse_motion_event(x, y);
+
         let (old_x, old_y) = self.input_state.mouse_pos;
         let (cur_dx, cur_dy) = self.input_state.mouse_diff;
 
@@ -149,7 +171,9 @@ impl<'a> EventHandler for Stage {
         self.input_state.mouse_diff = (cur_dx + (x - old_x), cur_dy + (y - old_y));
     }
 
-    fn mouse_button_up_event(&mut self, _ctx: &mut Context, button: MouseButton, _x: f32, _y: f32) {
+    fn mouse_button_up_event(&mut self, ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
+        self.egui_mq.mouse_button_up_event(ctx, button, x, y);
+
         let button_state = match button {
             MouseButton::Left => &mut self.input_state.left_mouse_button_down,
             MouseButton::Right => &mut self.input_state.right_mouse_button_down,
@@ -158,7 +182,14 @@ impl<'a> EventHandler for Stage {
         *button_state = false;
     }
 
-    fn mouse_button_down_event(&mut self, _ctx: &mut Context, button: MouseButton, _x: f32, _y: f32) {
+    fn mouse_button_down_event(&mut self, ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
+        self.egui_mq.mouse_button_down_event(ctx, button, x, y);
+
+        // Clicks on the UI shouldn't also move the camera.
+        if self.egui_mq.egui_ctx().is_pointer_over_area() {
+            return;
+        }
+
         let button_state = match button {
             MouseButton::Left => &mut self.input_state.left_mouse_button_down,
             MouseButton::Right => &mut self.input_state.right_mouse_button_down,
@@ -181,12 +212,7 @@ fn main() {
         ..Default::default()
     };
 
-    miniquad::start(config, |mut ctx: &mut GraphicsContext| {
-        let mut imgui_renderer = drawable::ImguiRenderer::new(&mut ctx);
-
-        Box::new(CombinedStage::new(vec![
-            Box::new(Stage::new(&mut ctx, imgui_renderer.ui()).unwrap()),
-            Box::new(imgui_renderer),
-        ]))
+    miniquad::start(config, |ctx: &mut GraphicsContext| {
+        Box::new(Stage::new(ctx).unwrap())
     });
 }
