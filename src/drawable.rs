@@ -14,7 +14,3 @@ pub trait Drawable {
     /// Build this drawable's egui windows. Called once per frame.
     fn ui(&mut self, _egui_ctx: &egui::Context) {}
 }
-
-pub trait DebugDrawable {
-    fn debug_draw(&mut self, ctx: &mut Context);
-}

@@ -7,7 +7,7 @@ use rand::Rng;
 use crate::hilbert::HilbertIndex;
 use crate::drawable::*;
 use crate::input::InputState;
-use crate::types::Vec2d;
+use crate::types::{Vec2, Vec2d};
 use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
 /// The texture width.
@@ -116,6 +116,10 @@ pub struct Region {
 /// and rendering logic, but it would be nice to separate them.
 pub struct Galaxy {
     textured_quad: TexturedQuad,
+
+    /// For drawing the quadtree's nodes when DEBUG_DRAW_QUADTREE is on.
+    wireframe_quad: WireframeQuad,
+
     texture_dirty: bool,
     pub time_scale: f64,
 
@@ -137,6 +141,7 @@ impl Galaxy {
 
         Ok(Self {
             textured_quad,
+            wireframe_quad: WireframeQuad::new(ctx)?,
             texture_dirty: true,
             time_scale: INITIAL_TIME_SCALE,
             quadtree: Self::generate_stars(rng)?,
@@ -359,14 +364,18 @@ impl Galaxy {
             let mut bytes = vec![0; 4 * TEX_WIDTH * TEX_HEIGHT];
 
             // Draw all stars in buffer.
-            let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
-            let view_size = self.camera.viewport_dimensions / zoom_scale;
-            let view_offset = self.camera.position - view_size * 0.5;
+            let (view_offset, view_size) = self.view_bounds();
             for (i, star) in self.quadtree.items.iter().enumerate() {
                 // Normalize position to texture coordinates.
                 let mut pos = star.position - view_offset;
                 pos.x /= view_size.x;
                 pos.y /= view_size.y;
+
+                // Skip stars off the left or bottom of the view, as casting a negative to usize
+                // gives 0 and they'd all be drawn along the edges.
+                if pos.x < 0.0 || pos.y < 0.0 {
+                    continue;
+                }
 
                 // Convert to pixel coordinates in our texture.
                 let x = (pos.x * TEX_WIDTH as f64) as usize;
@@ -469,6 +478,28 @@ impl Galaxy {
         f64::exp(linear)
     }
 
+    /// The area of the world currently in view, as (bottom left corner, size).
+    fn view_bounds(&self) -> (Vec2d, Vec2d) {
+        let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
+        let view_size = self.camera.viewport_dimensions / zoom_scale;
+        let view_offset = self.camera.position - view_size * 0.5;
+        (view_offset, view_size)
+    }
+
+    /// Draw the outline of every quadtree node over the stars, for debugging.
+    fn debug_draw_quadtree(&self, ctx: &mut Context) {
+        // Convert world coordinates to clip space (-1..1), the same way stars are mapped to the
+        // texture in update_texture.
+        let (view_offset, view_size) = self.view_bounds();
+        let to_clip = |p: Vec2d| Vec2::new(((p.x - view_offset.x) / view_size.x * 2.0 - 1.0) as f32,
+                                           ((p.y - view_offset.y) / view_size.y * 2.0 - 1.0) as f32);
+
+        self.quadtree.walk_nodes(|index, _| {
+            let (min, max) = index.bounds(self.quadtree.min, self.quadtree.max);
+            self.wireframe_quad.draw(ctx, &to_clip(min), &to_clip(max));
+        });
+    }
+
     // Project window to world coordinates.
     fn window_to_world(&self, window: Vec2d) -> Vec2d {
         // Just defined here since this module doesn't know the window parameters right now and
@@ -476,9 +507,7 @@ impl Galaxy {
         const WINDOW_WIDTH: f64 = 1024.0;
         const WINDOW_HEIGHT: f64 = 1024.0;
 
-        let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
-        let view_size = self.camera.viewport_dimensions / zoom_scale;
-        let view_offset = self.camera.position - view_size * 0.5;
+        let (view_offset, view_size) = self.view_bounds();
 
         let pos_vp = Vec2d::new(window.x / WINDOW_WIDTH, 1.0 - window.y / WINDOW_HEIGHT);
         Vec2d::new(pos_vp.x * view_size.x, pos_vp.y * view_size.y) + view_offset
@@ -562,7 +591,7 @@ impl Drawable for Galaxy {
         self.update_texture(ctx);
         self.textured_quad.draw(ctx);
         if DEBUG_DRAW_QUADTREE {
-            self.quadtree.debug_draw(ctx);
+            self.debug_draw_quadtree(ctx);
         }
     }
 
@@ -574,7 +603,10 @@ impl Drawable for Galaxy {
                 egui::CollapsingHeader::new("Simulation")
                     .default_open(true)
                     .show(ui, |ui| {
-                        ui.add(egui::Slider::new(&mut self.time_scale, 0.0..=50_000.0).text("Time scale"));
+                        // Don't clamp, so the M key can still take it past the end of the slider.
+                        ui.add(egui::Slider::new(&mut self.time_scale, 0.0..=50_000.0)
+                            .clamp_to_range(false)
+                            .text("Time scale"));
                     });
 
                 egui::CollapsingHeader::new("Camera")
@@ -583,7 +615,7 @@ impl Drawable for Galaxy {
                         ui.label(format!("Cam pos: {:.2}, {:.2}",
                                          self.camera.position.x,
                                          self.camera.position.y));
-                        ui.label(format!("Zoom level: {}", self.camera.zoom_level));
+                        ui.label(format!("Zoom level: {:.2}", self.camera.zoom_level));
                     });
 
                 egui::CollapsingHeader::new("Highlighted star")
@@ -592,7 +624,7 @@ impl Drawable for Galaxy {
                         if let Some(star) = self.find_star(self.camera.highlighted_star) {
                             ui.label(format!("Pos: {:.2}, {:.2}", star.position.x, star.position.y));
                             ui.label(format!("Velocity: {:.2}, {:.2}", star.velocity.x, star.velocity.y));
-                            ui.label(format!("Mass: {}", star.mass));
+                            ui.label(format!("Mass: {:.2}", star.mass));
                         }
                     });
             });

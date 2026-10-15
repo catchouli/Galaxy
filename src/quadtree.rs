@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::{error::Error, collections::VecDeque};
 
 use crate::types::Vec2d;
-use crate::drawable::*;
 use crate::hilbert;
 use crate::hilbert::HilbertIndex;
 
@@ -90,9 +89,6 @@ pub struct Quadtree<T: Spatial, Internal = ()> {
 
     /// The quadtree nodes, as a flat list.
     nodes: HashMap<HilbertIndex, QuadtreeNode>,
-
-    /// A wireframe quad primitive for debug drawing.
-    wireframe_quad: Option<WireframeQuad>,
 }
 
 impl<T: Spatial, Internal> Quadtree<T, Internal> {
@@ -104,7 +100,6 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
             items: Vec::new(),
             internal: Vec::new(),
             nodes: HashMap::new(),
-            wireframe_quad: None,
         })
     }
 
@@ -366,34 +361,6 @@ impl<T: Spatial, Internal> Quadtree<T, Internal> {
         self.walk_indices(|index| {
             if let Some(node) = self.get(index) {
                 f(index, node);
-            }
-        });
-    }
-}
-
-impl<T: Spatial, Internal> DebugDrawable for Quadtree<T, Internal> {
-    fn debug_draw(&mut self, ctx: &mut miniquad::Context) {
-        self.wireframe_quad.get_or_insert_with(|| {
-            WireframeQuad::new(ctx).unwrap()
-        });
-        let wireframe_quad = self.wireframe_quad.take().unwrap();
-
-        let root_origin = self.min;
-        let root_size = Vec2d::new(self.max.x - self.min.x, self.max.y - self.min.y);
-
-        self.walk_nodes(|index, node| {
-            if node.is_internal() || node.is_leaf() {
-                let (x, y) = index.to_xy();
-                let grid_size = 1 << index.depth();
-
-                let cell_size = Vec2d::new(root_size.x / grid_size as f64, root_size.y / grid_size as f64);
-
-                let cell_min = Vec2d::new(root_origin.x + cell_size.x * x as f64,
-                                         root_origin.y + cell_size.y * y as f64);
-                let cell_max = Vec2d::new(cell_min.x + cell_size.x,
-                                         cell_min.y + cell_size.y);
-
-                wireframe_quad.draw(ctx, &cell_min.into(), &cell_max.into());
             }
         });
     }
