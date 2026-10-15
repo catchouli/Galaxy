@@ -19,8 +19,10 @@ pub const MAX_DEPTH: u8 = 16;
 /// number of nodes in the current level.
 /// A 32-bit index lets us store 16 full levels of quadtree, or 1_431_655_765 nodes this way
 /// (4^0 + 4^1 + ... + 4^15).
-pub const _DEPTH_OFFSETS: [usize; 16] = [0, 1, 5, 21, 85, 341, 1365, 5461, 21845, 87381, 349525, 1398101,
-                                        5592405, 22369621, 89478485, 357913941];
+/// Only used by the tests at the moment.
+#[allow(dead_code)]
+pub const DEPTH_OFFSETS: [usize; 16] = [0, 1, 5, 21, 85, 341, 1365, 5461, 21845, 87381, 349525, 1398101,
+                                       5592405, 22369621, 89478485, 357913941];
 
 impl HilbertIndex {
     /// Convert from an (x, y) coordinate at a given quadtree depth. The (x, y) coordinate
@@ -95,13 +97,15 @@ impl HilbertIndex {
     }
 
     /// Calculate the linear array index of this hilbert index at this quadtree depth.
-    pub fn _array_index(&self) -> usize {
+    /// Only used by the tests at the moment.
+    #[allow(dead_code)]
+    pub fn array_index(&self) -> usize {
         let depth = self.depth();
         if depth >= MAX_DEPTH {
             panic!("Hilbert Index depth of {} is greater than maximum depth of {}", depth, MAX_DEPTH);
         }
 
-        _DEPTH_OFFSETS[depth as usize] + self.index() as usize
+        DEPTH_OFFSETS[depth as usize] + self.index() as usize
     }
 
     /// Get the children of this hilbert index, i.e. the four nodes in the same location as this

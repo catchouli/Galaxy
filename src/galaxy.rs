@@ -2,7 +2,6 @@ use std::error::Error;
 use std::f64::consts::PI;
 use std::time::Instant;
 
-use imgui::TreeNodeFlags;
 use miniquad::*;
 use rand::Rng;
 use crate::hilbert::HilbertIndex;
@@ -22,7 +21,7 @@ const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
                                      Vec2d::new(25_000.0, 25_000.0));
 
 /// The number of stars.
-const STAR_COUNT: usize = 5;
+const STAR_COUNT: usize = 1000;
 
 /// The minimum mass of each star, in solar masses.
 const STAR_MASS_MIN: f64 = 0.1;
@@ -48,6 +47,10 @@ const INITIAL_TIME_SCALE: f64 = 1000.0;
 
 /// Minimum distance^2 in gravity calculation, below which it is clamped to this value.
 const MIN_GRAVITY_DISTANCE_SQUARED: f64 = 0.0;
+
+/// The Barnes-Hut opening angle. A quadtree node is approximated as a single mass at its center
+/// of mass when its size divided by its distance is below this. Lower is more accurate but slower.
+const BARNES_HUT_THETA: f64 = 0.5;
 
 /// Whether to draw the debug overlay for the quadtree.
 const DEBUG_DRAW_QUADTREE: bool = false;
@@ -213,7 +216,7 @@ impl Galaxy {
 
                     // All child regions should be initialised now due to recursion.
                     let region = quadtree.get_internal(region_index)
-                        .expect(&format!("Internal error: child region {region_index:?} not initialised"));
+                        .unwrap_or_else(|| panic!("Internal error: child region {region_index:?} not initialised"));
                     mass += region.mass;
                     center_of_mass.x += region.mass * region.center_of_mass.x;
                     center_of_mass.y += region.mass * region.center_of_mass.y;
@@ -222,8 +225,8 @@ impl Galaxy {
                     let star = quadtree.get_item(item_index)
                         .expect("Internal error: failed to get star from leaf node");
                     mass += star.mass;
-                    center_of_mass.x += star.position.x;
-                    center_of_mass.y += star.position.y;
+                    center_of_mass.x += star.mass * star.position.x;
+                    center_of_mass.y += star.mass * star.position.y;
                 }
             }
         }
@@ -278,15 +281,17 @@ impl Galaxy {
             },
             Some(&QuadtreeNode::Internal(region_index)) => {
                 let region = quadtree.get_internal(region_index)
-                    .expect(&format!("Region {index:?} uninitialised when calculating forces"));
+                    .unwrap_or_else(|| panic!("Region {index:?} uninitialised when calculating forces"));
 
                 let diff = region.center_of_mass - point;
                 let dist_squared = diff.x * diff.x + diff.y * diff.y;
                 let dist = f64::sqrt(dist_squared);
-                let node_size = GALAXY_DIAMETER / (1 << index.depth()) as f64;
+                let node_size = (quadtree.max.x - quadtree.min.x) / (1u64 << index.depth()) as f64;
                 let dir = diff / dist;
 
-                if dist != 0.0 && node_size / dist > 1.0 {
+                // Only approximate the node if it's small relative to its distance, otherwise
+                // recurse into its children for a more accurate result.
+                if dist != 0.0 && node_size / dist < BARNES_HUT_THETA {
                     let force_of_gravity = region.mass * GRAVITATIONAL_CONSTANT / dist_squared;
                     force = force + dir * force_of_gravity;
                 }
@@ -472,35 +477,9 @@ impl Galaxy {
 
 impl Drawable for Galaxy {
     /// Update the galaxy.
-    fn update(&mut self, _ctx: &mut Context, ui: &mut imgui::Ui, input_state: &InputState, time_delta: f64) {
+    fn update(&mut self, _ctx: &mut Context, input_state: &InputState, time_delta: f64) {
         // Update camera.
         self.update_camera(input_state);
-
-        // Imgui windows.
-        ui.window("Galaxy")
-            .size([350.0, 300.0], imgui::Condition::FirstUseEver)
-            .build(|| {
-                ui.collapsing_header("Simulation", TreeNodeFlags::all())
-                    .then(|| {
-                        ui.slider("Time scale", 0.0, 50_000.0, &mut self.time_scale);
-                    });
-
-                ui.collapsing_header("Camera", TreeNodeFlags::all())
-                    .then(|| {
-                        ui.label_text("Cam pos", format!("{:.2}, {:.2}",
-                                                         self.camera.position.x,
-                                                         self.camera.position.y));
-                        ui.label_text("Zoom level", self.camera.zoom_level.to_string());
-                    });
-
-                ui.collapsing_header("Highlighted star", TreeNodeFlags::all())
-                    .then(|| {
-                        let star = &self.quadtree.items[self.camera.highlighted_star];
-                        ui.label_text("Pos", format!("{:.2}, {:.2}", star.position.x, star.position.y));
-                        ui.label_text("Velocity", format!("{:.2}, {:.2}", star.velocity.x, star.velocity.y));
-                        ui.label_text("Mass", star.mass.to_string());
-                    });
-            });
 
         // Lets just make a new quadtree every time...
         let quadtree_build_start = Instant::now();
@@ -530,11 +509,42 @@ impl Drawable for Galaxy {
     }
 
     /// Draw the galaxy.
-    fn draw(&mut self, ctx: &mut Context, _ui: &mut imgui::Ui) {
+    fn draw(&mut self, ctx: &mut Context) {
         self.update_texture(ctx);
         self.textured_quad.draw(ctx);
         if DEBUG_DRAW_QUADTREE {
             self.quadtree.debug_draw(ctx);
         }
+    }
+
+    /// Build the galaxy's egui window.
+    fn ui(&mut self, egui_ctx: &egui::Context) {
+        egui::Window::new("Galaxy")
+            .default_size([350.0, 300.0])
+            .show(egui_ctx, |ui| {
+                egui::CollapsingHeader::new("Simulation")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(&mut self.time_scale, 0.0..=50_000.0).text("Time scale"));
+                    });
+
+                egui::CollapsingHeader::new("Camera")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label(format!("Cam pos: {:.2}, {:.2}",
+                                         self.camera.position.x,
+                                         self.camera.position.y));
+                        ui.label(format!("Zoom level: {}", self.camera.zoom_level));
+                    });
+
+                egui::CollapsingHeader::new("Highlighted star")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let star = &self.quadtree.items[self.camera.highlighted_star];
+                        ui.label(format!("Pos: {:.2}, {:.2}", star.position.x, star.position.y));
+                        ui.label(format!("Velocity: {:.2}, {:.2}", star.velocity.x, star.velocity.y));
+                        ui.label(format!("Mass: {}", star.mass));
+                    });
+            });
     }
 }
