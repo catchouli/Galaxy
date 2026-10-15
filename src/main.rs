@@ -51,7 +51,9 @@ impl Stage {
 
         // Create galaxy.
         let seed = 152;
-        let galaxy = Self::generate_galaxy(ctx, seed)?;
+        log::info!("Generating galaxy with seed {seed}");
+        let galaxy = Galaxy::new(ctx, &mut StdRng::seed_from_u64(seed))?;
+        Self::log_quadtree(&galaxy);
 
         Ok(Stage {
             perlin_map,
@@ -64,19 +66,21 @@ impl Stage {
         })
     }
 
-    fn generate_galaxy(ctx: &mut Context, seed: u64) -> Result<Galaxy, Box<dyn Error>> {
-        log::info!("Generating galaxy with seed {seed}");
+    /// Regenerate the galaxy with the next seed.
+    fn regenerate_galaxy(&mut self) -> Result<(), Box<dyn Error>> {
+        self.seed += 1;
+        log::info!("Generating galaxy with seed {}", self.seed);
+        self.galaxy.regenerate(&mut StdRng::seed_from_u64(self.seed))?;
+        Self::log_quadtree(&self.galaxy);
+        Ok(())
+    }
 
-        let mut rng = StdRng::seed_from_u64(seed);
-        let galaxy = Galaxy::new(ctx, &mut rng)?;
-
-        // Print out quadtree for debugging.
+    /// Print out the galaxy's quadtree for debugging.
+    fn log_quadtree(galaxy: &Galaxy) {
         galaxy.quadtree.walk_nodes(|index@HilbertIndex(_, depth), node| {
             let indentation: String = repeat(' ').take(depth as usize * 2).collect();
             log::debug!("{indentation}{index:?} {node:?}");
         });
-
-        Ok(galaxy)
     }
 }
 
@@ -142,8 +146,7 @@ impl EventHandler for Stage {
         }
         else if keycode == KeyCode::Space {
             log::info!("Key pressed, regenerating galaxy");
-            self.seed += 1;
-            self.galaxy = Self::generate_galaxy(ctx, self.seed).unwrap();
+            self.regenerate_galaxy().unwrap();
         }
         else if keycode == KeyCode::M {
             self.galaxy.time_scale *= 10.0;
