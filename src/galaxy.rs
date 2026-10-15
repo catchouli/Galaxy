@@ -67,8 +67,8 @@ struct Camera {
     position: Vec2d,
     viewport_dimensions: Vec2d,
     zoom_level: f64,
-    locked_star: Option<usize>,
-    highlighted_star: usize,
+    locked_star: Option<StarId>,
+    highlighted_star: StarId,
     right_mouse_down_prev: bool,
 }
 
@@ -79,14 +79,22 @@ impl Camera {
             viewport_dimensions: VIEW_BOUNDS.1 - VIEW_BOUNDS.0,
             zoom_level: 0.0,
             locked_star: None,
-            highlighted_star: 0,
+            highlighted_star: BLACK_HOLE_ID,
             right_mouse_down_prev: false,
         }
     }
 }
 
+/// A stable identifier for a star. Unlike a star's index in the quadtree's item list, this doesn't
+/// change when other stars are removed.
+type StarId = usize;
+
+/// The ID of the supermassive black hole, which is always the first star created.
+const BLACK_HOLE_ID: StarId = 0;
+
 /// A single star in our galaxy.
 pub struct Star {
+    id: StarId,
     position: Vec2d,
     velocity: Vec2d,
     mass: f64,
@@ -127,19 +135,41 @@ impl Galaxy {
         // Create textured quad for drawing stars.
         let textured_quad = TexturedQuad::new(ctx, TEX_WIDTH, TEX_HEIGHT)?;
 
+        Ok(Self {
+            textured_quad,
+            texture_dirty: true,
+            time_scale: INITIAL_TIME_SCALE,
+            quadtree: Self::generate_stars(rng)?,
+            camera: Camera::new(),
+        })
+    }
+
+    /// Replace the galaxy with a newly generated one. This keeps the existing GPU resources, so
+    /// unlike `new` it doesn't need a graphics context and is safe to call from input handlers.
+    pub fn regenerate<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), Box<dyn Error>> {
+        self.quadtree = Self::generate_stars(rng)?;
+        self.texture_dirty = true;
+        self.time_scale = INITIAL_TIME_SCALE;
+        self.camera = Camera::new();
+        Ok(())
+    }
+
+    /// Generate the black hole and stars, returning a quadtree containing them.
+    fn generate_stars<R: Rng + ?Sized>(rng: &mut R) -> Result<Quadtree<Star, Region>, Box<dyn Error>> {
         // Create quadtree.
         let mut quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS*2.0, -GALAXY_RADIUS*2.0),
                                          Vec2d::new(GALAXY_RADIUS*2.0, GALAXY_RADIUS*2.0))?;
 
         // Add supermassive black hole at center of galaxy.
         quadtree.add(Star {
+            id: BLACK_HOLE_ID,
             position: Vec2d::new(0.0, 0.0),
             velocity: Vec2d::new(0.0, 0.0),
             mass: SUPERMASSIVE_BLACK_HOLE_MASS,
         });
 
         // Generate stars.
-        for _ in 0..STAR_COUNT {
+        for id in 1..=STAR_COUNT {
             // Generate star mass.
             let mass = rng.gen_range(STAR_MASS_MIN..STAR_MASS_MAX);
 
@@ -168,16 +198,10 @@ impl Galaxy {
             let velocity = direction * speed;
 
             // Add star to flat list and quadtree.
-            quadtree.add(Star { position, velocity, mass });
+            quadtree.add(Star { id, position, velocity, mass });
         }
 
-        Ok(Self {
-            textured_quad,
-            texture_dirty: true,
-            time_scale: INITIAL_TIME_SCALE,
-            quadtree,
-            camera: Camera::new(),
-        })
+        Ok(quadtree)
     }
 
     pub fn update_mass_distribution(quadtree: &mut Quadtree<Star, Region>) {
@@ -335,7 +359,6 @@ impl Galaxy {
             let mut bytes = vec![0; 4 * TEX_WIDTH * TEX_HEIGHT];
 
             // Draw all stars in buffer.
-            let mut star_count = 0;
             let zoom_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
             let view_size = self.camera.viewport_dimensions / zoom_scale;
             let view_offset = self.camera.position - view_size * 0.5;
@@ -359,13 +382,13 @@ impl Galaxy {
                         255.0) as u8;
 
                         // TODO: refactor this a bit.
-                        if i == self.camera.highlighted_star {
+                        if star.id == self.camera.highlighted_star {
                             pixel[0] = 0x0;
                             pixel[1] = 0xFF;
                             pixel[2] = 0x0;
                             pixel[3] = 0xFF;
                         }
-                        else if star_count > HIGHLIGHT_RED_STAR_COUNT {
+                        else if i >= HIGHLIGHT_RED_STAR_COUNT {
                             pixel[0] = brightness;
                             pixel[1] = brightness;
                             pixel[2] = brightness;
@@ -379,8 +402,6 @@ impl Galaxy {
                         }
                     }
                 }
-
-                star_count += 1;
             }
 
             // Update texture.
@@ -414,7 +435,9 @@ impl Galaxy {
         if self.camera.locked_star.is_none() {
             let mouse_pos_window = Vec2d::new(input_state.mouse_pos.0 as f64, input_state.mouse_pos.1 as f64);
             let mouse_pos_world = self.window_to_world(mouse_pos_window);
-            self.camera.highlighted_star = self.find_nearest_star(mouse_pos_world, HilbertIndex(0, 0));
+            if let Some(nearest) = self.find_nearest_star(mouse_pos_world) {
+                self.camera.highlighted_star = self.quadtree.items[nearest].id;
+            }
         }
 
         // Update camera position to locked star position.
@@ -428,9 +451,18 @@ impl Galaxy {
         }
         self.camera.right_mouse_down_prev = input_state.right_mouse_button_down;
 
+        // Follow the locked star, or unlock if it's gone (e.g. it left the quadtree's bounds).
         if let Some(locked_star) = self.camera.locked_star {
-            self.camera.position = self.quadtree.items[locked_star].position;
+            match self.find_star(locked_star) {
+                Some(star) => self.camera.position = star.position,
+                None => self.camera.locked_star = None,
+            }
         }
+    }
+
+    /// Find a star by its ID, if it still exists.
+    fn find_star(&self, id: StarId) -> Option<&Star> {
+        self.quadtree.items.iter().find(|star| star.id == id)
     }
 
     fn linear_scale_to_exponential(linear: f64) -> f64 {
@@ -452,25 +484,42 @@ impl Galaxy {
         Vec2d::new(pos_vp.x * view_size.x, pos_vp.y * view_size.y) + view_offset
     }
 
-    fn find_nearest_star(&self, point: Vec2d, index: HilbertIndex) -> usize {
+    /// Find the index of the star nearest to a point, if there are any stars in the quadtree.
+    fn find_nearest_star(&self, point: Vec2d) -> Option<usize> {
+        let mut nearest = None;
+        self.find_nearest_star_inner(point, HilbertIndex(0, 0), &mut nearest);
+        nearest.map(|(star_index, _)| star_index)
+    }
+
+    /// Search a quadtree node for a star nearer to the point than `nearest`, which holds the best
+    /// (star index, distance squared) found so far.
+    fn find_nearest_star_inner(&self, point: Vec2d, index: HilbertIndex, nearest: &mut Option<(usize, f64)>) {
         match self.quadtree.get(index) {
-            Some(&QuadtreeNode::Internal(_)) => {
-                let (x, y) = index.to_xy();
-                let depth = index.depth();
-
-                // Traverse into children until we find a leaf node.
-                let (node_min, node_max) = index.bounds(self.quadtree.min, self.quadtree.max);
-                let node_center = node_min * 0.5 + node_max * 0.5;
-
-                let quadrant_x = if point.x < node_center.x { 0 } else { 1 };
-                let quadrant_y = if point.y < node_center.y { 0 } else { 1 };
-
-                let child_index = HilbertIndex::from_xy_depth((x*2 + quadrant_x, y*2 + quadrant_y), depth + 1);
-                
-                self.find_nearest_star(point, child_index)
+            Some(&QuadtreeNode::Leaf(star_index)) => {
+                let diff = self.quadtree.items[star_index].position - point;
+                let d_squared = diff.x * diff.x + diff.y * diff.y;
+                if nearest.map_or(true, |(_, best)| d_squared < best) {
+                    *nearest = Some((star_index, d_squared));
+                }
             },
-            Some(&QuadtreeNode::Leaf(star_index)) => star_index,
-            _ => 0,
+            Some(&QuadtreeNode::Internal(_)) => {
+                // Visit the children closest to the point first, so we find a near star early and
+                // can skip any child that's further away than it.
+                let mut children = index.children().map(|child_index| {
+                    let (min, max) = child_index.bounds(self.quadtree.min, self.quadtree.max);
+                    let dx = f64::max(0.0, f64::max(min.x - point.x, point.x - max.x));
+                    let dy = f64::max(0.0, f64::max(min.y - point.y, point.y - max.y));
+                    (child_index, dx * dx + dy * dy)
+                });
+                children.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+                for (child_index, d_squared_to_child) in children {
+                    if nearest.map_or(true, |(_, best)| d_squared_to_child < best) {
+                        self.find_nearest_star_inner(point, child_index, nearest);
+                    }
+                }
+            },
+            None => {},
         }
     }
 }
@@ -540,10 +589,11 @@ impl Drawable for Galaxy {
                 egui::CollapsingHeader::new("Highlighted star")
                     .default_open(true)
                     .show(ui, |ui| {
-                        let star = &self.quadtree.items[self.camera.highlighted_star];
-                        ui.label(format!("Pos: {:.2}, {:.2}", star.position.x, star.position.y));
-                        ui.label(format!("Velocity: {:.2}, {:.2}", star.velocity.x, star.velocity.y));
-                        ui.label(format!("Mass: {}", star.mass));
+                        if let Some(star) = self.find_star(self.camera.highlighted_star) {
+                            ui.label(format!("Pos: {:.2}, {:.2}", star.position.x, star.position.y));
+                            ui.label(format!("Velocity: {:.2}, {:.2}", star.velocity.x, star.velocity.y));
+                            ui.label(format!("Mass: {}", star.mass));
+                        }
                     });
             });
     }
