@@ -2,13 +2,13 @@ use std::error::Error;
 use std::f64::consts::PI;
 use std::time::Instant;
 
+use crate::drawable::*;
+use crate::hilbert::HilbertIndex;
+use crate::input::InputState;
+use crate::quadtree::{Quadtree, QuadtreeNode, Spatial};
+use crate::types::{Vec2, Vec2d};
 use miniquad::*;
 use rand::Rng;
-use crate::hilbert::HilbertIndex;
-use crate::drawable::*;
-use crate::input::InputState;
-use crate::types::{Vec2, Vec2d};
-use crate::quadtree::{Quadtree, Spatial, QuadtreeNode};
 
 /// The texture width.
 const TEX_WIDTH: usize = 512;
@@ -17,8 +17,10 @@ const TEX_WIDTH: usize = 512;
 const TEX_HEIGHT: usize = 512;
 
 /// The view bounds (min, max), in parsecs, about the galaxy's origin.
-const VIEW_BOUNDS: (Vec2d, Vec2d) = (Vec2d::new(-25_000.0, -25_000.0),
-                                     Vec2d::new(25_000.0, 25_000.0));
+const VIEW_BOUNDS: (Vec2d, Vec2d) = (
+    Vec2d::new(-25_000.0, -25_000.0),
+    Vec2d::new(25_000.0, 25_000.0),
+);
 
 /// The number of stars.
 const STAR_COUNT: usize = 1000;
@@ -160,10 +162,14 @@ impl Galaxy {
     }
 
     /// Generate the black hole and stars, returning a quadtree containing them.
-    fn generate_stars<R: Rng + ?Sized>(rng: &mut R) -> Result<Quadtree<Star, Region>, Box<dyn Error>> {
+    fn generate_stars<R: Rng + ?Sized>(
+        rng: &mut R,
+    ) -> Result<Quadtree<Star, Region>, Box<dyn Error>> {
         // Create quadtree.
-        let mut quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS*2.0, -GALAXY_RADIUS*2.0),
-                                         Vec2d::new(GALAXY_RADIUS*2.0, GALAXY_RADIUS*2.0))?;
+        let mut quadtree = Quadtree::new(
+            Vec2d::new(-GALAXY_RADIUS * 2.0, -GALAXY_RADIUS * 2.0),
+            Vec2d::new(GALAXY_RADIUS * 2.0, GALAXY_RADIUS * 2.0),
+        )?;
 
         // Add supermassive black hole at center of galaxy.
         quadtree.add(Star {
@@ -186,13 +192,17 @@ impl Galaxy {
 
             // Generate position in a rectangle.
             let position_bounds = (-GALAXY_RADIUS)..GALAXY_RADIUS;
-            let position = Vec2d::new(rng.gen_range(position_bounds.clone()),
-                                      rng.gen_range(position_bounds));
+            let position = Vec2d::new(
+                rng.gen_range(position_bounds.clone()),
+                rng.gen_range(position_bounds),
+            );
             let distance_from_center = f64::sqrt(position.x * position.x + position.y * position.y);
 
             // Calculate speed for orbit at this radius.
             // https://www.nagwa.com/en/explainers/142168516704/
-            let speed = f64::sqrt(GRAVITATIONAL_CONSTANT * SUPERMASSIVE_BLACK_HOLE_MASS / distance_from_center);
+            let speed = f64::sqrt(
+                GRAVITATIONAL_CONSTANT * SUPERMASSIVE_BLACK_HOLE_MASS / distance_from_center,
+            );
             //let speed = f64::sqrt(GRAVITATIONAL_CONSTANT * 10000.0 / distance_from_center);
             //let speed = 0.0;
             //let speed = rng.gen_range(0.0..0.1);
@@ -203,7 +213,12 @@ impl Galaxy {
             let velocity = direction * speed;
 
             // Add star to flat list and quadtree.
-            quadtree.add(Star { id, position, velocity, mass });
+            quadtree.add(Star {
+                id,
+                position,
+                velocity,
+                mass,
+            });
         }
 
         Ok(quadtree)
@@ -221,9 +236,7 @@ impl Galaxy {
         }
     }
 
-    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Star, Region>,
-                                      index: HilbertIndex)
-    {
+    fn update_mass_distribution_inner(quadtree: &mut Quadtree<Star, Region>, index: HilbertIndex) {
         // Update all children recursively, and then sum up their masses and produce a weighted
         // center of mess.
         let mut mass = 0.0;
@@ -244,14 +257,16 @@ impl Galaxy {
                     Self::update_mass_distribution_inner(quadtree, child_index);
 
                     // All child regions should be initialised now due to recursion.
-                    let region = quadtree.get_internal(region_index)
-                        .unwrap_or_else(|| panic!("Internal error: child region {region_index:?} not initialised"));
+                    let region = quadtree.get_internal(region_index).unwrap_or_else(|| {
+                        panic!("Internal error: child region {region_index:?} not initialised")
+                    });
                     mass += region.mass;
                     center_of_mass.x += region.mass * region.center_of_mass.x;
                     center_of_mass.y += region.mass * region.center_of_mass.y;
-                },
+                }
                 &QuadtreeNode::Leaf(item_index) => {
-                    let star = quadtree.get_item(item_index)
+                    let star = quadtree
+                        .get_item(item_index)
                         .expect("Internal error: failed to get star from leaf node");
                     mass += star.mass;
                     center_of_mass.x += star.mass * star.position.x;
@@ -269,10 +284,13 @@ impl Galaxy {
         // Update region data for this internal node.
         match quadtree.get(index) {
             Some(&QuadtreeNode::Internal(region_index)) => {
-                let region = Region { mass, center_of_mass };
+                let region = Region {
+                    mass,
+                    center_of_mass,
+                };
                 quadtree.set_internal(region_index, Some(region));
-            },
-            _ => panic!("Found non-internal node when updating mass distribution")
+            }
+            _ => panic!("Found non-internal node when updating mass distribution"),
         }
     }
 
@@ -286,19 +304,24 @@ impl Galaxy {
     }
 
     /// Calculate the forces on an object from a particular tree node, recursively.
-    fn acceleration_at_point_inner(quadtree: &Quadtree<Star, Region>, point: Vec2d, index: HilbertIndex) -> Vec2d {
+    fn acceleration_at_point_inner(
+        quadtree: &Quadtree<Star, Region>,
+        point: Vec2d,
+        index: HilbertIndex,
+    ) -> Vec2d {
         let mut force = Vec2d::new(0.0, 0.0);
 
         match quadtree.get(index) {
             Some(&QuadtreeNode::Leaf(item_index)) => {
-                let star = quadtree.get_item(item_index)
-                    .expect("Failed to get star");
+                let star = quadtree.get_item(item_index).expect("Failed to get star");
 
                 // If the star is at the same position as the point, we should ignore it as it's
                 // probably the object itself, and otherwise we'll end up dividing by zero anyway.
                 let diff = star.position - point;
-                let d_squared = f64::max(MIN_GRAVITY_DISTANCE_SQUARED,
-                                         diff.x * diff.x + diff.y * diff.y);
+                let d_squared = f64::max(
+                    MIN_GRAVITY_DISTANCE_SQUARED,
+                    diff.x * diff.x + diff.y * diff.y,
+                );
 
                 if d_squared > 0.0 {
                     let dist = f64::sqrt(d_squared);
@@ -307,10 +330,11 @@ impl Galaxy {
 
                     force = force + dir * force_of_star_gravity;
                 }
-            },
+            }
             Some(&QuadtreeNode::Internal(region_index)) => {
-                let region = quadtree.get_internal(region_index)
-                    .unwrap_or_else(|| panic!("Region {index:?} uninitialised when calculating forces"));
+                let region = quadtree.get_internal(region_index).unwrap_or_else(|| {
+                    panic!("Region {index:?} uninitialised when calculating forces")
+                });
 
                 let diff = region.center_of_mass - point;
                 let dist_squared = diff.x * diff.x + diff.y * diff.y;
@@ -323,14 +347,14 @@ impl Galaxy {
                 if dist != 0.0 && node_size / dist < BARNES_HUT_THETA {
                     let force_of_gravity = region.mass * GRAVITATIONAL_CONSTANT / dist_squared;
                     force = force + dir * force_of_gravity;
-                }
-                else {
+                } else {
                     for child_index in index.children() {
-                        force = force + Self::acceleration_at_point_inner(quadtree, point, child_index);
+                        force =
+                            force + Self::acceleration_at_point_inner(quadtree, point, child_index);
                     }
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
 
         force
@@ -385,10 +409,11 @@ impl Galaxy {
                     if x < TEX_WIDTH && y < TEX_HEIGHT {
                         // Get index and slice of pixel, *4 because the texture is 4 bytes per pixel.
                         let idx = 4 * (y * TEX_WIDTH + x);
-                        let pixel = &mut bytes[idx..idx+4];
+                        let pixel = &mut bytes[idx..idx + 4];
 
-                        let brightness = f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0,
-                        255.0) as u8;
+                        let brightness =
+                            f64::min(star.mass / (STAR_MASS_MAX - STAR_MASS_MIN) * 255.0, 255.0)
+                                as u8;
 
                         // TODO: refactor this a bit.
                         if star.id == self.camera.highlighted_star {
@@ -396,14 +421,12 @@ impl Galaxy {
                             pixel[1] = 0xFF;
                             pixel[2] = 0x0;
                             pixel[3] = 0xFF;
-                        }
-                        else if i >= HIGHLIGHT_RED_STAR_COUNT {
+                        } else if i >= HIGHLIGHT_RED_STAR_COUNT {
                             pixel[0] = brightness;
                             pixel[1] = brightness;
                             pixel[2] = brightness;
                             pixel[3] = 0xFF;
-                        }
-                        else {
+                        } else {
                             pixel[0] = brightness;
                             pixel[1] = 0x0;
                             pixel[2] = 0x0;
@@ -424,15 +447,16 @@ impl Galaxy {
         const WINDOW_WIDTH: f64 = 1024.0;
 
         // Update camera zoom using scrollwheel.
-        self.camera.zoom_level = f64::max(0.0,
-            self.camera.zoom_level + input_state.mouse_wheel_dy as f64 * CAMERA_ZOOM_SPEED);
+        self.camera.zoom_level = f64::max(
+            0.0,
+            self.camera.zoom_level + input_state.mouse_wheel_dy as f64 * CAMERA_ZOOM_SPEED,
+        );
 
         let cur_scale = Self::linear_scale_to_exponential(self.camera.zoom_level);
         if input_state.left_mouse_button_down {
             // Translate pixel movement to movement at the current scale.
             // TODO: only works for a square viewport currently.
-            let movement_scale = self.camera.viewport_dimensions.x / WINDOW_WIDTH
-                / cur_scale;
+            let movement_scale = self.camera.viewport_dimensions.x / WINDOW_WIDTH / cur_scale;
 
             // Calculate movement.
             let (mouse_dx, mouse_dy) = input_state.mouse_diff;
@@ -442,7 +466,10 @@ impl Galaxy {
 
         // Update highlighted star.
         if self.camera.locked_star.is_none() {
-            let mouse_pos_window = Vec2d::new(input_state.mouse_pos.0 as f64, input_state.mouse_pos.1 as f64);
+            let mouse_pos_window = Vec2d::new(
+                input_state.mouse_pos.0 as f64,
+                input_state.mouse_pos.1 as f64,
+            );
             let mouse_pos_world = self.window_to_world(mouse_pos_window);
             if let Some(nearest) = self.find_nearest_star(mouse_pos_world) {
                 self.camera.highlighted_star = self.quadtree.items[nearest].id;
@@ -453,8 +480,7 @@ impl Galaxy {
         if input_state.right_mouse_button_down && !self.camera.right_mouse_down_prev {
             if self.camera.locked_star.is_some() {
                 self.camera.locked_star = None;
-            }
-            else {
+            } else {
                 self.camera.locked_star = Some(self.camera.highlighted_star);
             }
         }
@@ -491,8 +517,12 @@ impl Galaxy {
         // Convert world coordinates to clip space (-1..1), the same way stars are mapped to the
         // texture in update_texture.
         let (view_offset, view_size) = self.view_bounds();
-        let to_clip = |p: Vec2d| Vec2::new(((p.x - view_offset.x) / view_size.x * 2.0 - 1.0) as f32,
-                                           ((p.y - view_offset.y) / view_size.y * 2.0 - 1.0) as f32);
+        let to_clip = |p: Vec2d| {
+            Vec2::new(
+                ((p.x - view_offset.x) / view_size.x * 2.0 - 1.0) as f32,
+                ((p.y - view_offset.y) / view_size.y * 2.0 - 1.0) as f32,
+            )
+        };
 
         self.quadtree.walk_nodes(|index, _| {
             let (min, max) = index.bounds(self.quadtree.min, self.quadtree.max);
@@ -522,7 +552,12 @@ impl Galaxy {
 
     /// Search a quadtree node for a star nearer to the point than `nearest`, which holds the best
     /// (star index, distance squared) found so far.
-    fn find_nearest_star_inner(&self, point: Vec2d, index: HilbertIndex, nearest: &mut Option<(usize, f64)>) {
+    fn find_nearest_star_inner(
+        &self,
+        point: Vec2d,
+        index: HilbertIndex,
+        nearest: &mut Option<(usize, f64)>,
+    ) {
         match self.quadtree.get(index) {
             Some(&QuadtreeNode::Leaf(star_index)) => {
                 let diff = self.quadtree.items[star_index].position - point;
@@ -530,7 +565,7 @@ impl Galaxy {
                 if nearest.map_or(true, |(_, best)| d_squared < best) {
                     *nearest = Some((star_index, d_squared));
                 }
-            },
+            }
             Some(&QuadtreeNode::Internal(_)) => {
                 // Visit the children closest to the point first, so we find a near star early and
                 // can skip any child that's further away than it.
@@ -547,8 +582,8 @@ impl Galaxy {
                         self.find_nearest_star_inner(point, child_index, nearest);
                     }
                 }
-            },
-            None => {},
+            }
+            None => {}
         }
     }
 }
@@ -563,8 +598,11 @@ impl Drawable for Galaxy {
         let quadtree_build_start = Instant::now();
         let stars = std::mem::replace(&mut self.quadtree.items, Vec::new());
 
-        self.quadtree = Quadtree::new(Vec2d::new(-GALAXY_RADIUS*2.0, -GALAXY_RADIUS*2.0),
-                                      Vec2d::new(GALAXY_RADIUS*2.0, GALAXY_RADIUS*2.0)).unwrap();
+        self.quadtree = Quadtree::new(
+            Vec2d::new(-GALAXY_RADIUS * 2.0, -GALAXY_RADIUS * 2.0),
+            Vec2d::new(GALAXY_RADIUS * 2.0, GALAXY_RADIUS * 2.0),
+        )
+        .unwrap();
 
         for star in stars {
             self.quadtree.add(star);
@@ -604,17 +642,20 @@ impl Drawable for Galaxy {
                     .default_open(true)
                     .show(ui, |ui| {
                         // Don't clamp, so the M key can still take it past the end of the slider.
-                        ui.add(egui::Slider::new(&mut self.time_scale, 0.0..=50_000.0)
-                            .clamp_to_range(false)
-                            .text("Time scale"));
+                        ui.add(
+                            egui::Slider::new(&mut self.time_scale, 0.0..=50_000.0)
+                                .clamp_to_range(false)
+                                .text("Time scale"),
+                        );
                     });
 
                 egui::CollapsingHeader::new("Camera")
                     .default_open(true)
                     .show(ui, |ui| {
-                        ui.label(format!("Cam pos: {:.2}, {:.2}",
-                                         self.camera.position.x,
-                                         self.camera.position.y));
+                        ui.label(format!(
+                            "Cam pos: {:.2}, {:.2}",
+                            self.camera.position.x, self.camera.position.y
+                        ));
                         ui.label(format!("Zoom level: {:.2}", self.camera.zoom_level));
                     });
 
@@ -622,8 +663,14 @@ impl Drawable for Galaxy {
                     .default_open(true)
                     .show(ui, |ui| {
                         if let Some(star) = self.find_star(self.camera.highlighted_star) {
-                            ui.label(format!("Pos: {:.2}, {:.2}", star.position.x, star.position.y));
-                            ui.label(format!("Velocity: {:.2}, {:.2}", star.velocity.x, star.velocity.y));
+                            ui.label(format!(
+                                "Pos: {:.2}, {:.2}",
+                                star.position.x, star.position.y
+                            ));
+                            ui.label(format!(
+                                "Velocity: {:.2}, {:.2}",
+                                star.velocity.x, star.velocity.y
+                            ));
                             ui.label(format!("Mass: {:.2}", star.mass));
                         }
                     });
